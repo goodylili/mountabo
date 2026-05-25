@@ -33,7 +33,7 @@ type GitHubConfig struct {
 func Load() *Config {
 	loadDotenv()
 	return &Config{
-		HTTPAddr:        env("MOUNTABO_HTTP_ADDR", "127.0.0.1:7777"),
+		HTTPAddr:        env("MOUNTABO_HTTP_ADDR", "127.0.0.1:7778"),
 		ShutdownTimeout: 10 * time.Second,
 		GitHub: GitHubConfig{
 			ClientID:     os.Getenv("GITHUB_CLIENT_ID"),

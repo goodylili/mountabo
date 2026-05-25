@@ -36,7 +36,7 @@ export async function GET(request: Request) {
       return NextResponse.redirect(`${origin}/connect?error=exchange`);
     }
 
-    const backend = process.env.MOUNTABO_BACKEND ?? "http://localhost:7777";
+    const backend = process.env.MOUNTABO_BACKEND ?? "http://localhost:7778";
     let resp: Response;
     try {
       resp = await fetch(`${backend}/api/github/exchange`, {

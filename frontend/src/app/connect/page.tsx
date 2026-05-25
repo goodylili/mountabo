@@ -60,7 +60,7 @@ export default async function ConnectPage({
               {error === "state"
                 ? "connection check failed (state mismatch). please try again."
                 : error === "backend"
-                  ? "couldn't reach the mountabo backend. is it running on localhost:7777?"
+                  ? "couldn't reach the mountabo backend. is it running on localhost:7778?"
                   : "could not complete the github exchange. please try again."}
             </p>
           )}
