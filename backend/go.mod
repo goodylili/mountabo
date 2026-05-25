@@ -4,6 +4,7 @@ go 1.25.10
 
 require (
 	github.com/google/go-github/v88 v88.0.0
+	github.com/joho/godotenv v1.5.1
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/oauth2 v0.36.0
 )

@@ -4,8 +4,12 @@
 package config
 
 import (
+	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // Config is mountabo's resolved runtime configuration.
@@ -25,7 +29,9 @@ type GitHubConfig struct {
 }
 
 // Load reads configuration from the environment, applying local-first defaults.
+// It first loads the repository-root .env (shared with the frontend) if present.
 func Load() *Config {
+	loadDotenv()
 	return &Config{
 		HTTPAddr:        env("MOUNTABO_HTTP_ADDR", "127.0.0.1:7777"),
 		ShutdownTimeout: 10 * time.Second,
@@ -33,6 +39,32 @@ func Load() *Config {
 			ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 			ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		},
+	}
+}
+
+// loadDotenv loads the repository-root .env if one exists, searching upward from
+// the working directory so it is found whether the binary runs from the repo
+// root or from backend/. Real environment variables always win — godotenv.Load
+// never overrides values already set. A shipped binary with no .env simply uses
+// the OS environment.
+func loadDotenv() {
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		path := filepath.Join(dir, ".env")
+		if _, statErr := os.Stat(path); statErr == nil {
+			if loadErr := godotenv.Load(path); loadErr != nil {
+				slog.Warn("loading .env", "path", path, "err", loadErr)
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return // reached the filesystem root without finding a .env
+		}
+		dir = parent
 	}
 }
 
