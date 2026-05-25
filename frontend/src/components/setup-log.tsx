@@ -22,6 +22,14 @@ export function SetupLog({
   const [finished, setFinished] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // Keep onStatus in a ref so the effect depends ONLY on server.id. Otherwise a
+  // fresh onStatus identity each render (and the state update it triggers) would
+  // re-run the effect, reopen the EventSource, and re-run setup in a loop.
+  const onStatusRef = useRef(onStatus);
+  useEffect(() => {
+    onStatusRef.current = onStatus;
+  }, [onStatus]);
+
   useEffect(() => {
     const es = new EventSource(`/api/servers/${server.id}/setup`);
 
@@ -33,8 +41,8 @@ export function SetupLog({
     es.addEventListener("done", (e) => {
       add((e as MessageEvent).data || "server is ready", "done");
       setFinished(true);
-      onStatus("ready");
-      es.close();
+      onStatusRef.current("ready");
+      es.close(); // prevent EventSource auto-reconnect (which would re-run setup)
     });
 
     es.addEventListener("error", (e) => {
@@ -43,14 +51,15 @@ export function SetupLog({
         // Backend-reported setup failure (a named SSE error event).
         add(data, "error");
         setFinished(true);
-        onStatus("failed");
-        es.close();
+        onStatusRef.current("failed");
       }
-      // Otherwise it's a transient connection event EventSource will retry.
+      // On any error event, close so EventSource never silently reconnects and
+      // re-triggers the bootstrap against the server.
+      es.close();
     });
 
     return () => es.close();
-  }, [server.id, onStatus]);
+  }, [server.id]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });

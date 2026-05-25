@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ErrSetupInProgress is returned when a setup is already running for a server,
+// preventing concurrent or duplicate bootstrap runs against the same host.
+var ErrSetupInProgress = errors.New("setup already in progress for this server")
 
 // BootstrapUser is the non-root account mountabo creates and uses on every
 // server. Fixed by product decision.
@@ -126,11 +131,14 @@ type ServerService struct {
 	boot   ServerBootstrapper
 	keys   KeyMaker
 	vault  SecretVault
+
+	mu        sync.Mutex
+	settingUp map[string]bool // server ids with a bootstrap in flight
 }
 
 // NewServerService wires the service to its ports.
 func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, keys KeyMaker, vault SecretVault) *ServerService {
-	return &ServerService{store: store, prober: prober, boot: boot, keys: keys, vault: vault}
+	return &ServerService{store: store, prober: prober, boot: boot, keys: keys, vault: vault, settingUp: map[string]bool{}}
 }
 
 // Add connects to the server with the root password, probes its specs, and
@@ -204,6 +212,22 @@ func (s *ServerService) Get(id string) (Server, error) {
 // success stores the private half in the vault, deletes the root password, and
 // marks the server ready. Progress lines are written to out as they happen.
 func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) error {
+	// Guard against concurrent/duplicate bootstraps for the same server (e.g. a
+	// reconnecting client) so we never run multiple SSH setups at once — which
+	// could corrupt state or trip the server's fail2ban.
+	s.mu.Lock()
+	if s.settingUp[id] {
+		s.mu.Unlock()
+		return ErrSetupInProgress
+	}
+	s.settingUp[id] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.settingUp, id)
+		s.mu.Unlock()
+	}()
+
 	server, err := s.store.Get(id)
 	if err != nil {
 		return err

@@ -105,9 +105,14 @@ func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 		sw.event("done", "server is ready")
 	case errors.Is(err, usecase.ErrServerNotFound):
 		sw.event("error", "server not found")
+	case errors.Is(err, usecase.ErrSetupInProgress):
+		sw.event("error", "setup is already running for this server")
 	default:
 		h.log.Error("server setup failed", "id", id, "err", err)
-		sw.event("error", "setup failed — check the live log above")
+		// Surface the (secret-free) reason in the stream so the user can see why,
+		// then the terminal error event. Newlines are flattened for SSE framing.
+		sw.data("✗ " + strings.ReplaceAll(err.Error(), "\n", " "))
+		sw.event("error", "setup failed")
 	}
 }
 
@@ -161,6 +166,7 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 }
 
 func (s *sseWriter) data(line string) {
+	//nolint:gosec // G705 false positive: this is an SSE stream (text/event-stream) consumed by EventSource as data, not an HTML sink
 	_, _ = fmt.Fprintf(s.w, "data: %s\n\n", strings.TrimRight(line, "\r"))
 	s.flusher.Flush()
 }
