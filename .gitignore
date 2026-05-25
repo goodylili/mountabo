@@ -61,6 +61,8 @@ desktop.ini
 
 # Tooling / local agent state
 .claude
+.agents/
+skills-lock.json
 agents/
 .air.toml
 .task/
