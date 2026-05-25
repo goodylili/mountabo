@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# mountabo server bootstrap — fresh Ubuntu -> hardened, Docker-ready.
+# Rendered and run by mountabo over SSH as root. Fully non-interactive.
+# SSH hardening runs LAST: if an earlier step fails the run aborts with root
+# still reachable, so the setup can be retried.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+log() { echo "==> $*"; }
+
+log "updating package lists"
+apt-get update -y
+
+log "upgrading system (this can take several minutes)"
+apt-get upgrade -y
+
+log "installing base packages"
+apt-get install -y curl ca-certificates ufw fail2ban unattended-upgrades rsync
+
+log "creating user {{.User}}"
+if ! id -u {{.User}} >/dev/null 2>&1; then
+  adduser --disabled-password --gecos "" {{.User}}
+fi
+usermod -aG sudo {{.User}}
+echo '{{.User}} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-mountabo
+chmod 440 /etc/sudoers.d/90-mountabo
+
+log "installing ssh key for {{.User}}"
+install -d -m 700 -o {{.User}} -g {{.User}} /home/{{.User}}/.ssh
+cat > /home/{{.User}}/.ssh/authorized_keys <<'MOUNTABO_AUTHORIZED_KEY'
+{{.PublicKey}}
+MOUNTABO_AUTHORIZED_KEY
+chown {{.User}}:{{.User}} /home/{{.User}}/.ssh/authorized_keys
+chmod 600 /home/{{.User}}/.ssh/authorized_keys
+
+log "configuring firewall (ufw)"
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw --force enable
+
+log "enabling fail2ban"
+systemctl enable --now fail2ban
+
+log "enabling automatic security updates"
+echo 'unattended-upgrades unattended-upgrades/enable_auto_updates boolean true' | debconf-set-selections
+dpkg-reconfigure -f noninteractive unattended-upgrades
+
+log "setting timezone to {{.Timezone}}"
+timedatectl set-timezone '{{.Timezone}}'
+
+log "installing docker"
+curl -fsSL https://get.docker.com | sh
+usermod -aG docker {{.User}}
+apt-get install -y docker-compose-plugin
+
+log "verifying docker"
+docker --version
+docker compose version
+
+log "hardening ssh (key-only, no root login)"
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+grep -q '^PermitRootLogin no' /etc/ssh/sshd_config || echo 'PermitRootLogin no' >> /etc/ssh/sshd_config
+grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
+sshd -t
+systemctl restart ssh
+
+log "done — server is deploy-ready as {{.User}}"

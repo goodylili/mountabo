@@ -19,6 +19,9 @@ type Config struct {
 	HTTPAddr        string
 	ShutdownTimeout time.Duration
 	GitHub          GitHubConfig
+	// DataDir is where mountabo keeps local state (e.g. servers.json). Defaults
+	// to ~/.mountabo.
+	DataDir string
 }
 
 // GitHubConfig holds the GitHub App OAuth credentials used to exchange
@@ -39,7 +42,18 @@ func Load() *Config {
 			ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 			ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		},
+		DataDir: env("MOUNTABO_DATA_DIR", defaultDataDir()),
 	}
+}
+
+// defaultDataDir is ~/.mountabo, falling back to ./.mountabo if the home dir
+// can't be resolved.
+func defaultDataDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".mountabo"
+	}
+	return filepath.Join(home, ".mountabo")
 }
 
 // loadDotenv loads the repository-root .env if one exists, searching upward from

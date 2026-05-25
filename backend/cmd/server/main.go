@@ -9,12 +9,15 @@ import (
 	nethttp "net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	httpadapter "github.com/goodylili/mountabo/internal/adapter/http"
+	"github.com/goodylili/mountabo/internal/adapter/repository"
 	"github.com/goodylili/mountabo/internal/config"
 	"github.com/goodylili/mountabo/internal/github"
 	"github.com/goodylili/mountabo/internal/keychain"
+	"github.com/goodylili/mountabo/internal/ssh"
 	"github.com/goodylili/mountabo/internal/usecase"
 )
 
@@ -29,6 +32,8 @@ func run() error {
 	cfg := config.Load()
 	logger := slog.Default()
 
+	keyStore := keychain.NewStore()
+
 	// Compose the GitHub connection flow: OAuth exchange + account lookup + repo
 	// listing (all github) + token persistence (keychain), driven by the
 	// connector. One github.Client serves both account and repo reads.
@@ -37,11 +42,19 @@ func run() error {
 		github.NewOAuth(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret),
 		ghClient,
 		ghClient,
-		keychain.NewStore(),
+		keyStore,
 	)
-
 	githubHandler := httpadapter.NewGitHubHandler(connector, logger)
-	router := httpadapter.NewRouter(githubHandler)
+
+	// Compose the server flow: SSH probe + bootstrap + key generation (all ssh),
+	// JSON-file persistence, and keychain secrets. One ssh.Client serves probe,
+	// bootstrap, and keygen.
+	sshClient := ssh.NewClient()
+	serverStore := repository.NewServerFile(filepath.Join(cfg.DataDir, "servers.json"))
+	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, keyStore)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, logger)
+
+	router := httpadapter.NewRouter(githubHandler, serversHandler)
 	srv := httpadapter.NewServer(cfg, router)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

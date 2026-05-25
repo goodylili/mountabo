@@ -20,10 +20,14 @@ const (
 	tokenKey = "github-token"
 )
 
-// Store reads and writes mountabo's GitHub token in the OS keychain.
+// Store reads and writes mountabo's secrets in the OS keychain — the GitHub
+// token and, generically, per-server secrets (root passwords, generated keys).
 type Store struct{}
 
-var _ usecase.TokenStore = (*Store)(nil)
+var (
+	_ usecase.TokenStore  = (*Store)(nil)
+	_ usecase.SecretVault = (*Store)(nil)
+)
 
 // NewStore returns a keychain-backed token store.
 func NewStore() *Store {
@@ -70,6 +74,36 @@ func (s *Store) Delete() error {
 	}
 	if err != nil {
 		return fmt.Errorf("delete token from keychain: %w", err)
+	}
+	return nil
+}
+
+// SaveSecret stores an arbitrary secret under key, replacing any existing value.
+func (s *Store) SaveSecret(key, value string) error {
+	if err := keyring.Set(service, key, value); err != nil {
+		return fmt.Errorf("write secret to keychain: %w", err)
+	}
+	return nil
+}
+
+// LoadSecret reads a secret by key, returning usecase.ErrNotConnected-free
+// errors; a missing key yields an error so callers can react.
+func (s *Store) LoadSecret(key string) (string, error) {
+	v, err := keyring.Get(service, key)
+	if err != nil {
+		return "", fmt.Errorf("read secret from keychain: %w", err)
+	}
+	return v, nil
+}
+
+// DeleteSecret removes a secret by key. It is idempotent.
+func (s *Store) DeleteSecret(key string) error {
+	err := keyring.Delete(service, key)
+	if errors.Is(err, keyring.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("delete secret from keychain: %w", err)
 	}
 	return nil
 }
