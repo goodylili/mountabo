@@ -62,6 +62,12 @@ func (h *ServersHandler) Add(w nethttp.ResponseWriter, r *nethttp.Request) {
 	h.writeJSON(w, nethttp.StatusCreated, server)
 }
 
+// Options returns the catalog of opt-in hardening steps so the UI can let the
+// operator choose which to apply.
+func (h *ServersHandler) Options(w nethttp.ResponseWriter, _ *nethttp.Request) {
+	h.writeJSON(w, nethttp.StatusOK, h.svc.Options())
+}
+
 // List returns all added servers (without secrets).
 func (h *ServersHandler) List(w nethttp.ResponseWriter, _ *nethttp.Request) {
 	servers, err := h.svc.List()
@@ -79,6 +85,13 @@ func (h *ServersHandler) List(w nethttp.ResponseWriter, _ *nethttp.Request) {
 // because the bootstrap can run for many minutes.
 func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := r.PathValue("id")
+
+	// Opt-in hardening options are passed as ?options=firewall,fail2ban — empty
+	// means base setup only. usecase canonicalises/validates them.
+	var options []string
+	if raw := r.URL.Query().Get("options"); raw != "" {
+		options = strings.Split(raw, ",")
+	}
 
 	flusher, ok := w.(nethttp.Flusher)
 	if !ok {
@@ -99,7 +112,7 @@ func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 	flusher.Flush()
 
 	sw := &sseWriter{w: w, flusher: flusher}
-	err := h.svc.Setup(r.Context(), id, sw)
+	err := h.svc.Setup(r.Context(), id, options, sw)
 	sw.flushPartial()
 
 	switch {

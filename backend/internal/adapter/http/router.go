@@ -21,6 +21,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler) *nethttp.ServeMux {
 
 	mux.HandleFunc("POST /api/servers", sv.Add)
 	mux.HandleFunc("GET /api/servers", sv.List)
+	mux.HandleFunc("GET /api/servers/options", sv.Options)
 	mux.HandleFunc("GET /api/servers/{id}/setup", sv.Setup)
 	mux.HandleFunc("DELETE /api/servers/{id}", sv.Delete)
 	return mux

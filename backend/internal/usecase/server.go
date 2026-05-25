@@ -85,6 +85,59 @@ type BootstrapParams struct {
 	// UserPublicKey is the operator's own public key, installed alongside
 	// mountabo's so they can SSH in directly. Empty if none is available.
 	UserPublicKey string
+	// Options are the ids of opt-in hardening steps to append after the base
+	// setup, in catalog order. Empty means base setup only.
+	Options []string
+}
+
+// SetupOption is an opt-in hardening step the operator can choose to apply. The
+// Description explains what it does and its trade-off so the choice is informed.
+type SetupOption struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// SetupOptions is the catalog of optional steps. Order is the order they are
+// applied (harden-ssh last, after keys + firewall are in place). None are
+// applied unless the operator explicitly selects them.
+var SetupOptions = []SetupOption{
+	{
+		ID:          "firewall",
+		Name:        "UFW firewall",
+		Description: "Block all inbound traffic except SSH (22), HTTP (80) and HTTPS (443). Reduces exposure — but note Docker can publish container ports past UFW unless you bind them to localhost.",
+	},
+	{
+		ID:          "fail2ban",
+		Name:        "fail2ban",
+		Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force attempts. Can briefly lock you out if you mistype your own login several times.",
+	},
+	{
+		ID:          "auto-updates",
+		Name:        "Automatic security updates",
+		Description: "Install unattended-upgrades so security patches apply on their own. Keeps the box patched without you; may occasionally trigger a reboot.",
+	},
+	{
+		ID:          "harden-ssh",
+		Name:        "Harden SSH (key-only)",
+		Description: "Disable root login and password authentication — SSH becomes key-only. Strong protection, BUT you can be locked out if your key isn't installed, and your root password will no longer work over SSH (only via the provider console).",
+	},
+}
+
+// canonicalOptions returns the requested option ids that exist in the catalog,
+// in catalog order, dropping unknowns and duplicates.
+func canonicalOptions(requested []string) []string {
+	want := map[string]bool{}
+	for _, id := range requested {
+		want[id] = true
+	}
+	var out []string
+	for _, opt := range SetupOptions {
+		if want[opt.ID] {
+			out = append(out, opt.ID)
+		}
+	}
+	return out
 }
 
 // ── ports (consumed here, implemented by adapters) ──
@@ -206,6 +259,11 @@ func (s *ServerService) Add(ctx context.Context, in AddServerInput) (Server, err
 	return server, nil
 }
 
+// Options returns the catalog of opt-in hardening steps for the UI to present.
+func (s *ServerService) Options() []SetupOption {
+	return SetupOptions
+}
+
 // List returns all added servers.
 func (s *ServerService) List() ([]Server, error) {
 	servers, err := s.store.List()
@@ -225,10 +283,11 @@ func (s *ServerService) Get(id string) (Server, error) {
 }
 
 // Setup runs the bootstrap on a probed server, streaming progress to out. It
-// generates mountabo's SSH key, installs the public half on the server, and on
-// success stores the private half in the vault, deletes the root password, and
-// marks the server ready. Progress lines are written to out as they happen.
-func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) error {
+// generates mountabo's SSH key, installs the public half on the server, applies
+// any opt-in hardening options the operator selected, and on success stores the
+// private half in the vault and marks the server ready. Progress lines are
+// written to out as they happen.
+func (s *ServerService) Setup(ctx context.Context, id string, options []string, out io.Writer) error {
 	// Guard against concurrent/duplicate bootstraps for the same server (e.g. a
 	// reconnecting client) so we never run multiple SSH setups at once — which
 	// could corrupt state or trip the server's fail2ban.
@@ -281,7 +340,7 @@ func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) err
 	// Pin the host key captured when the server was added: if it doesn't match,
 	// the bootstrap (and the root password) must not go to an impostor.
 	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: "root", Password: password, Fingerprint: server.Fingerprint}
-	params := BootstrapParams{User: BootstrapUser, Timezone: server.Timezone, PublicKey: publicKey, UserPublicKey: userKey}
+	params := BootstrapParams{User: BootstrapUser, Timezone: server.Timezone, PublicKey: publicKey, UserPublicKey: userKey, Options: canonicalOptions(options)}
 
 	if bootErr := s.boot.Bootstrap(ctx, target, params, out); bootErr != nil {
 		server.Status = StatusFailed

@@ -24,8 +24,32 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-//go:embed scripts/bootstrap.sh.tmpl
+//go:embed scripts/bootstrap.sh.tmpl scripts/options
 var scripts embed.FS
+
+// optionScripts maps an opt-in option id (e.g. "firewall") to its shell
+// fragment, loaded once from the embedded scripts/options directory.
+var optionScripts = loadOptionScripts()
+
+func loadOptionScripts() map[string]string {
+	out := map[string]string{}
+	entries, err := scripts.ReadDir("scripts/options")
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".sh") {
+			continue
+		}
+		data, err := scripts.ReadFile("scripts/options/" + name)
+		if err != nil {
+			continue
+		}
+		out[strings.TrimSuffix(name, ".sh")] = string(data)
+	}
+	return out
+}
 
 // Client connects to servers over SSH. One Client serves probing, bootstrap,
 // and key generation.
@@ -139,7 +163,7 @@ func parseSpecs(out string) usecase.ServerSpecs {
 // root over SSH, streaming combined stdout/stderr to out as it executes. The run
 // is aborted if ctx is cancelled (e.g. the client disconnects).
 func (c *Client) Bootstrap(ctx context.Context, t usecase.SSHTarget, p usecase.BootstrapParams, out io.Writer) error {
-	script, err := renderBootstrap(p)
+	script, err := composeScript(p)
 	if err != nil {
 		return err
 	}
@@ -177,7 +201,30 @@ func (c *Client) Bootstrap(ctx context.Context, t usecase.SSHTarget, p usecase.B
 	return nil
 }
 
-func renderBootstrap(p usecase.BootstrapParams) (string, error) {
+// composeScript renders the base bootstrap, appends the operator's chosen opt-in
+// option fragments (in the order usecase canonicalised them), and a final done
+// line. Everything runs in one root SSH session, so option fragments reuse the
+// base's log() helper and its earlier apt update.
+func composeScript(p usecase.BootstrapParams) (string, error) {
+	base, err := renderBase(p)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	for _, id := range p.Options {
+		frag, ok := optionScripts[id]
+		if !ok {
+			continue // unknown id (usecase validates, so this is just defensive)
+		}
+		b.WriteString("\n")
+		b.WriteString(frag)
+	}
+	fmt.Fprintf(&b, "\nlog \"done — server is ready as %s\"\n", p.User)
+	return b.String(), nil
+}
+
+func renderBase(p usecase.BootstrapParams) (string, error) {
 	raw, err := scripts.ReadFile("scripts/bootstrap.sh.tmpl")
 	if err != nil {
 		return "", fmt.Errorf("read bootstrap template: %w", err)

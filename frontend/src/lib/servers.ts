@@ -26,6 +26,13 @@ export type ServerView = {
   createdAt: string;
 };
 
+// An opt-in hardening step the operator can choose at setup time.
+export type SetupOption = {
+  id: string;
+  name: string;
+  description: string;
+};
+
 export function backendURL(): string {
   return process.env.MOUNTABO_BACKEND ?? "http://localhost:7778";
 }

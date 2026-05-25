@@ -55,4 +55,6 @@ log "verifying docker"
 docker --version
 docker compose version
 
-log "done — server is deploy-ready as {{.User}} (ssh login left unchanged)"
+log "base setup complete (ssh login left unchanged)"
+# Optional, opt-in steps the operator chose are appended below by mountabo,
+# followed by a final "done" line.

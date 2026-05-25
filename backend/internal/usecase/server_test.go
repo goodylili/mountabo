@@ -99,7 +99,7 @@ func TestSetup_StoresKeyAndKeepsRootPasswordForRecovery(t *testing.T) {
 		Name: "edge-1", IP: "1.2.3.4", Timezone: "UTC", RootPassword: "s3cret",
 	})
 
-	if err := svc.Setup(context.Background(), server.ID, io.Discard); err != nil {
+	if err := svc.Setup(context.Background(), server.ID, nil, io.Discard); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestSetup_FailureKeepsPasswordForRetry(t *testing.T) {
 		Name: "edge-1", IP: "1.2.3.4", Timezone: "UTC", RootPassword: "s3cret",
 	})
 
-	if err := svc.Setup(context.Background(), server.ID, io.Discard); err == nil {
+	if err := svc.Setup(context.Background(), server.ID, nil, io.Discard); err == nil {
 		t.Fatal("expected setup error")
 	}
 	if vault.secrets[rootPasswordKey(server.ID)] != "s3cret" {
@@ -134,13 +134,28 @@ func TestSetup_FailureKeepsPasswordForRetry(t *testing.T) {
 	}
 }
 
+func TestCanonicalOptions_FiltersAndOrders(t *testing.T) {
+	// Unknown ids dropped, duplicates collapsed, output in catalog order
+	// (harden-ssh last) regardless of request order.
+	got := canonicalOptions([]string{"harden-ssh", "bogus", "firewall", "firewall"})
+	want := []string{"firewall", "harden-ssh"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
 func TestRemove_DestroysAllSecrets(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	svc := newService(store, vault, fakeBootstrapper{})
 	server, _ := svc.Add(context.Background(), AddServerInput{
 		Name: "edge-1", IP: "1.2.3.4", Timezone: "UTC", RootPassword: "s3cret",
 	})
-	_ = svc.Setup(context.Background(), server.ID, io.Discard)
+	_ = svc.Setup(context.Background(), server.ID, nil, io.Discard)
 
 	if err := svc.Remove(server.ID); err != nil {
 		t.Fatalf("Remove: %v", err)
