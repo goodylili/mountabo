@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/template"
@@ -35,6 +37,7 @@ var (
 	_ usecase.ServerProber       = (*Client)(nil)
 	_ usecase.ServerBootstrapper = (*Client)(nil)
 	_ usecase.KeyMaker           = (*Client)(nil)
+	_ usecase.LocalKeyProvider   = (*Client)(nil)
 )
 
 // NewClient returns an SSH client with a sensible dial timeout.
@@ -188,6 +191,27 @@ func renderBootstrap(p usecase.BootstrapParams) (string, error) {
 		return "", fmt.Errorf("render bootstrap template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// LocalPublicKey reads the operator's own SSH public key from this machine,
+// trying the common key names in order. It returns "" (no error) when none is
+// found, so a user without a local key simply doesn't get one installed.
+func (c *Client) LocalPublicKey() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil //nolint:nilerr // no home dir → no local key to offer, not a failure
+	}
+	for _, name := range []string{"id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"} {
+		//nolint:gosec // G304: path is the OS home dir joined with a fixed allowlist of public-key filenames — no user-controlled input
+		data, err := os.ReadFile(filepath.Join(home, ".ssh", name))
+		if err != nil {
+			continue
+		}
+		if key := strings.TrimSpace(string(data)); key != "" {
+			return key, nil
+		}
+	}
+	return "", nil
 }
 
 // Generate creates an ed25519 keypair for mountabo's access to a server. It

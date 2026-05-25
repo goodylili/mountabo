@@ -25,11 +25,12 @@ func NewServersHandler(svc *usecase.ServerService, log *slog.Logger) *ServersHan
 }
 
 type addServerRequest struct {
-	Name         string `json:"name"`
-	IP           string `json:"ip"`
-	Port         int    `json:"port"`
-	Timezone     string `json:"timezone"`
-	RootPassword string `json:"rootPassword"`
+	Name          string `json:"name"`
+	IP            string `json:"ip"`
+	Port          int    `json:"port"`
+	Timezone      string `json:"timezone"`
+	RootPassword  string `json:"rootPassword"`
+	UserPublicKey string `json:"userPublicKey"`
 }
 
 // Add probes a server over SSH with the root password and records it. The root
@@ -46,11 +47,12 @@ func (h *ServersHandler) Add(w nethttp.ResponseWriter, r *nethttp.Request) {
 	}
 
 	server, err := h.svc.Add(r.Context(), usecase.AddServerInput{
-		Name:         req.Name,
-		IP:           req.IP,
-		Port:         req.Port,
-		Timezone:     req.Timezone,
-		RootPassword: req.RootPassword,
+		Name:          req.Name,
+		IP:            req.IP,
+		Port:          req.Port,
+		Timezone:      req.Timezone,
+		RootPassword:  req.RootPassword,
+		UserPublicKey: req.UserPublicKey,
 	})
 	if err != nil {
 		h.log.Error("add server failed", "err", err)

@@ -23,10 +23,11 @@ usermod -aG sudo {{.User}}
 echo '{{.User}} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-mountabo
 chmod 440 /etc/sudoers.d/90-mountabo
 
-log "installing ssh key for {{.User}} (mountabo now has its own access)"
+log "installing ssh keys for {{.User}} (mountabo + your own access)"
 install -d -m 700 -o {{.User}} -g {{.User}} /home/{{.User}}/.ssh
 cat > /home/{{.User}}/.ssh/authorized_keys <<'MOUNTABO_AUTHORIZED_KEY'
-{{.PublicKey}}
+{{.PublicKey}}{{if .UserPublicKey}}
+{{.UserPublicKey}}{{end}}
 MOUNTABO_AUTHORIZED_KEY
 chown {{.User}}:{{.User}} /home/{{.User}}/.ssh/authorized_keys
 chmod 600 /home/{{.User}}/.ssh/authorized_keys

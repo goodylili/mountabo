@@ -19,7 +19,7 @@ function browserTimezone(): string {
 // client click, so reading localStorage at init is safe — no SSR hydration.)
 const DRAFT_KEY = "mountabo:add-server-draft";
 
-type Draft = { name?: string; ip?: string; port?: string; timezone?: string };
+type Draft = { name?: string; ip?: string; port?: string; timezone?: string; userPublicKey?: string };
 
 function readDraft(): Draft {
   if (typeof window === "undefined") return {};
@@ -41,6 +41,7 @@ export function AddServerForm({
   const [ip, setIp] = useState(() => readDraft().ip ?? "");
   const [port, setPort] = useState(() => readDraft().port ?? "22");
   const [timezone, setTimezone] = useState(() => readDraft().timezone ?? browserTimezone());
+  const [userPublicKey, setUserPublicKey] = useState(() => readDraft().userPublicKey ?? "");
   const [rootPassword, setRootPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,11 +51,11 @@ export function AddServerForm({
   // in an effect.
   useEffect(() => {
     try {
-      window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, ip, port, timezone }));
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, ip, port, timezone, userPublicKey }));
     } catch {
       // localStorage unavailable (private mode / disabled) — drafts just won't persist.
     }
-  }, [name, ip, port, timezone]);
+  }, [name, ip, port, timezone, userPublicKey]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -64,7 +65,14 @@ export function AddServerForm({
       const resp = await fetch("/api/servers", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name, ip, port: Number(port) || 22, timezone, rootPassword }),
+        body: JSON.stringify({
+          name,
+          ip,
+          port: Number(port) || 22,
+          timezone,
+          rootPassword,
+          userPublicKey: userPublicKey.trim(),
+        }),
       });
       if (resp.ok) {
         try {
@@ -107,7 +115,7 @@ export function AddServerForm({
           <input value={timezone} onChange={(e) => setTimezone(e.target.value)} placeholder="Africa/Lagos" className={inputCls} required />
         </Field>
         <div className="col-span-2">
-          <Field label="root password (used once over ssh, then discarded)">
+          <Field label="root password (used over ssh; kept in your keychain for recovery)">
             <input
               type="password"
               value={rootPassword}
@@ -115,6 +123,16 @@ export function AddServerForm({
               placeholder="from your provider"
               className={inputCls}
               required
+            />
+          </Field>
+        </div>
+        <div className="col-span-2">
+          <Field label="your ssh public key (optional — leave blank to auto-detect ~/.ssh)">
+            <input
+              value={userPublicKey}
+              onChange={(e) => setUserPublicKey(e.target.value)}
+              placeholder="ssh-ed25519 AAAA… (so you can ssh in too)"
+              className={inputCls}
             />
           </Field>
         </div>

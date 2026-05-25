@@ -58,6 +58,9 @@ type Server struct {
 	Specs       ServerSpecs  `json:"specs"`
 	Fingerprint string       `json:"fingerprint"`
 	CreatedAt   time.Time    `json:"createdAt"`
+	// UserPublicKey is the operator's own SSH public key (a public value, safe to
+	// store) installed alongside mountabo's so the human can also reach the box.
+	UserPublicKey string `json:"userPublicKey,omitempty"`
 }
 
 // SSHTarget is where and how to reach a server over SSH.
@@ -78,7 +81,10 @@ type SSHTarget struct {
 type BootstrapParams struct {
 	User      string
 	Timezone  string
-	PublicKey string
+	PublicKey string // mountabo's generated public key
+	// UserPublicKey is the operator's own public key, installed alongside
+	// mountabo's so they can SSH in directly. Empty if none is available.
+	UserPublicKey string
 }
 
 // ── ports (consumed here, implemented by adapters) ──
@@ -99,6 +105,13 @@ type KeyMaker interface {
 	Generate(comment string) (privatePEM, publicKey string, err error)
 }
 
+// LocalKeyProvider reads the operator's own SSH public key from this machine
+// (mountabo runs locally), so it can be installed for their direct access.
+// Returns "" (no error) when none is found.
+type LocalKeyProvider interface {
+	LocalPublicKey() (string, error)
+}
+
 // ServerStore persists servers (a JSON file today, SQLite later).
 type ServerStore interface {
 	List() ([]Server, error)
@@ -117,34 +130,37 @@ type SecretVault interface {
 
 // AddServerInput is what the user supplies to add a server.
 type AddServerInput struct {
-	Name         string
-	IP           string
-	Port         int
-	Timezone     string
-	RootPassword string
+	Name          string
+	IP            string
+	Port          int
+	Timezone      string
+	RootPassword  string
+	UserPublicKey string // optional: the operator's own public key (paste fallback)
 }
 
 // ServerService adds, lists, and bootstraps servers.
 type ServerService struct {
-	store  ServerStore
-	prober ServerProber
-	boot   ServerBootstrapper
-	keys   KeyMaker
-	vault  SecretVault
+	store     ServerStore
+	prober    ServerProber
+	boot      ServerBootstrapper
+	keys      KeyMaker
+	localKeys LocalKeyProvider
+	vault     SecretVault
 
 	mu        sync.Mutex
 	settingUp map[string]bool // server ids with a bootstrap in flight
 }
 
 // NewServerService wires the service to its ports.
-func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, keys KeyMaker, vault SecretVault) *ServerService {
-	return &ServerService{store: store, prober: prober, boot: boot, keys: keys, vault: vault, settingUp: map[string]bool{}}
+func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, keys KeyMaker, localKeys LocalKeyProvider, vault SecretVault) *ServerService {
+	return &ServerService{store: store, prober: prober, boot: boot, keys: keys, localKeys: localKeys, vault: vault, settingUp: map[string]bool{}}
 }
 
 // Add connects to the server with the root password, probes its specs, and
 // records it as "probed". The root password is held in the vault (encrypted by
-// the OS) so the later setup step can reuse it; it is deleted once setup
-// succeeds. The password never lands on the Server struct or in the store.
+// the OS) for the setup step and kept afterwards for break-glass console
+// recovery; it is destroyed only when the server is removed. The password never
+// lands on the Server struct or in the store.
 func (s *ServerService) Add(ctx context.Context, in AddServerInput) (Server, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IP = strings.TrimSpace(in.IP)
@@ -169,15 +185,16 @@ func (s *ServerService) Add(ctx context.Context, in AddServerInput) (Server, err
 	}
 
 	server := Server{
-		ID:          newID(),
-		Name:        in.Name,
-		IP:          in.IP,
-		SSHPort:     in.Port,
-		Timezone:    in.Timezone,
-		Status:      StatusProbed,
-		Specs:       specs,
-		Fingerprint: fingerprint,
-		CreatedAt:   time.Now().UTC(),
+		ID:            newID(),
+		Name:          in.Name,
+		IP:            in.IP,
+		SSHPort:       in.Port,
+		Timezone:      in.Timezone,
+		Status:        StatusProbed,
+		Specs:         specs,
+		Fingerprint:   fingerprint,
+		CreatedAt:     time.Now().UTC(),
+		UserPublicKey: strings.TrimSpace(in.UserPublicKey),
 	}
 
 	if err := s.vault.SaveSecret(rootPasswordKey(server.ID), in.RootPassword); err != nil {
@@ -248,10 +265,23 @@ func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) err
 		return fmt.Errorf("save server: %w", err)
 	}
 
+	// Resolve the operator's own public key so they get direct SSH access:
+	// prefer one they pasted, else auto-detect a local ~/.ssh key. If neither
+	// exists, only mountabo will have access — say so in the live log.
+	userKey := strings.TrimSpace(server.UserPublicKey)
+	if userKey == "" {
+		if detected, derr := s.localKeys.LocalPublicKey(); derr == nil {
+			userKey = detected
+		}
+	}
+	if userKey == "" {
+		_, _ = io.WriteString(out, "==> note: no personal SSH key found (~/.ssh) or pasted — only mountabo will have key access to this server\n")
+	}
+
 	// Pin the host key captured when the server was added: if it doesn't match,
 	// the bootstrap (and the root password) must not go to an impostor.
 	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: "root", Password: password, Fingerprint: server.Fingerprint}
-	params := BootstrapParams{User: BootstrapUser, Timezone: server.Timezone, PublicKey: publicKey}
+	params := BootstrapParams{User: BootstrapUser, Timezone: server.Timezone, PublicKey: publicKey, UserPublicKey: userKey}
 
 	if bootErr := s.boot.Bootstrap(ctx, target, params, out); bootErr != nil {
 		server.Status = StatusFailed
@@ -264,11 +294,10 @@ func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) err
 	if err := s.vault.SaveSecret(privateKeyKey(id), privateKey); err != nil {
 		return fmt.Errorf("store mountabo key: %w", err)
 	}
-	// The root password is no longer needed once the key-based mountabo user
-	// exists — throw it away.
-	if err := s.vault.DeleteSecret(rootPasswordKey(id)); err != nil {
-		return fmt.Errorf("delete root password: %w", err)
-	}
+	// The root password is kept in the keychain (encrypted at rest), not
+	// discarded: SSH hardening disables it for remote login, but the operator
+	// still needs it for break-glass recovery via the provider's rescue/VNC
+	// console. It is destroyed only when the server is removed.
 
 	server.Status = StatusReady
 	if err := s.store.Save(server); err != nil {

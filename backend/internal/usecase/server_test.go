@@ -30,6 +30,10 @@ func (fakeKeyMaker) Generate(string) (string, string, error) {
 	return "PRIVATE-KEY-PEM", "ssh-ed25519 AAAA mountabo", nil
 }
 
+type fakeLocalKeyProvider struct{ key string }
+
+func (f fakeLocalKeyProvider) LocalPublicKey() (string, error) { return f.key, nil }
+
 type fakeVault struct{ secrets map[string]string }
 
 func newFakeVault() *fakeVault { return &fakeVault{secrets: map[string]string{}} }
@@ -67,7 +71,7 @@ func (m *memServerStore) Delete(id string) error {
 }
 
 func newService(store ServerStore, vault SecretVault, boot ServerBootstrapper) *ServerService {
-	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, fakeKeyMaker{}, vault)
+	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
 }
 
 func TestAdd_StoresRootPasswordInVaultNotOnServer(t *testing.T) {
@@ -88,7 +92,7 @@ func TestAdd_StoresRootPasswordInVaultNotOnServer(t *testing.T) {
 	}
 }
 
-func TestSetup_StoresKeyAndWipesRootPassword(t *testing.T) {
+func TestSetup_StoresKeyAndKeepsRootPasswordForRecovery(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	svc := newService(store, vault, fakeBootstrapper{})
 	server, _ := svc.Add(context.Background(), AddServerInput{
@@ -99,8 +103,8 @@ func TestSetup_StoresKeyAndWipesRootPassword(t *testing.T) {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	if _, ok := vault.secrets[rootPasswordKey(server.ID)]; ok {
-		t.Error("root password should be wiped after successful setup")
+	if vault.secrets[rootPasswordKey(server.ID)] != "s3cret" {
+		t.Error("root password should be kept after setup for break-glass recovery")
 	}
 	if vault.secrets[privateKeyKey(server.ID)] != "PRIVATE-KEY-PEM" {
 		t.Error("mountabo private key should be stored after setup")
