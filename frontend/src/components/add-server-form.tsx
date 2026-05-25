@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ServerView } from "@/lib/servers";
 
 // The browser's IANA timezone (e.g. "Africa/Lagos"), used to prefill the field
@@ -13,6 +13,23 @@ function browserTimezone(): string {
   }
 }
 
+// Non-sensitive form fields are remembered between visits so a refresh doesn't
+// lose them. The root password is NEVER stored here — it goes only to the
+// backend, which keeps it in the OS keychain. (AddServerForm only mounts after a
+// client click, so reading localStorage at init is safe — no SSR hydration.)
+const DRAFT_KEY = "mountabo:add-server-draft";
+
+type Draft = { name?: string; ip?: string; port?: string; timezone?: string };
+
+function readDraft(): Draft {
+  if (typeof window === "undefined") return {};
+  try {
+    return JSON.parse(window.localStorage.getItem(DRAFT_KEY) ?? "{}") as Draft;
+  } catch {
+    return {};
+  }
+}
+
 export function AddServerForm({
   onAdded,
   onCancel,
@@ -20,13 +37,24 @@ export function AddServerForm({
   onAdded: (server: ServerView) => void;
   onCancel: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [ip, setIp] = useState("");
-  const [port, setPort] = useState("22");
-  const [timezone, setTimezone] = useState(browserTimezone);
+  const [name, setName] = useState(() => readDraft().name ?? "");
+  const [ip, setIp] = useState(() => readDraft().ip ?? "");
+  const [port, setPort] = useState(() => readDraft().port ?? "22");
+  const [timezone, setTimezone] = useState(() => readDraft().timezone ?? browserTimezone());
   const [rootPassword, setRootPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Persist the non-sensitive fields (never the password) so they survive a
+  // reload. Writing to localStorage here does not set React state, so it is safe
+  // in an effect.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, ip, port, timezone }));
+    } catch {
+      // localStorage unavailable (private mode / disabled) — drafts just won't persist.
+    }
+  }, [name, ip, port, timezone]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -39,6 +67,11 @@ export function AddServerForm({
         body: JSON.stringify({ name, ip, port: Number(port) || 22, timezone, rootPassword }),
       });
       if (resp.ok) {
+        try {
+          window.localStorage.removeItem(DRAFT_KEY);
+        } catch {
+          // ignore
+        }
         onAdded((await resp.json()) as ServerView);
         return;
       }
