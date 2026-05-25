@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# mountabo server bootstrap — fresh Ubuntu -> hardened, Docker-ready.
+# mountabo server bootstrap — fresh Ubuntu -> Docker-ready.
 # Rendered and run by mountabo over SSH as root. Fully non-interactive.
 #
-# Order matters:
-#   1. FIRST, create the mountabo user + install its SSH key + sudo. This hands
-#      mountabo its own key-based access immediately — before the long/riskier
-#      steps — so it owns the box from the start and a later failure never leaves
-#      it locked out.
+# It does NOT modify /etc/ssh/sshd_config: root login and password
+# authentication are left exactly as the provider set them, so the operator
+# keeps whatever access they already had.
+#
+# Order:
+#   1. FIRST, create the mountabo user + install SSH keys (mountabo's + the
+#      operator's) + sudo, so key-based access exists immediately.
 #   2. THEN the system work (apt, firewall, fail2ban, timezone, docker).
-#   3. LAST, harden SSH (disable root + password login). If an earlier step
-#      fails the run aborts with root still reachable, so setup can be retried.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -68,12 +68,4 @@ log "verifying docker"
 docker --version
 docker compose version
 
-log "hardening ssh (key-only, no root login)"
-sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-grep -q '^PermitRootLogin no' /etc/ssh/sshd_config || echo 'PermitRootLogin no' >> /etc/ssh/sshd_config
-grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config || echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
-sshd -t
-systemctl restart ssh
-
-log "done — server is deploy-ready as {{.User}}"
+log "done — server is deploy-ready as {{.User}} (ssh login left unchanged)"

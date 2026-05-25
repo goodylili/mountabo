@@ -158,9 +158,9 @@ func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstr
 
 // Add connects to the server with the root password, probes its specs, and
 // records it as "probed". The root password is held in the vault (encrypted by
-// the OS) for the setup step and kept afterwards for break-glass console
-// recovery; it is destroyed only when the server is removed. The password never
-// lands on the Server struct or in the store.
+// the OS) for the setup step and kept afterwards for root SSH/console access; it
+// is destroyed only when the server is removed. The password never lands on the
+// Server struct or in the store.
 func (s *ServerService) Add(ctx context.Context, in AddServerInput) (Server, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.IP = strings.TrimSpace(in.IP)
@@ -295,9 +295,9 @@ func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) err
 		return fmt.Errorf("store mountabo key: %w", err)
 	}
 	// The root password is kept in the keychain (encrypted at rest), not
-	// discarded: SSH hardening disables it for remote login, but the operator
-	// still needs it for break-glass recovery via the provider's rescue/VNC
-	// console. It is destroyed only when the server is removed.
+	// discarded. mountabo does not harden sshd, so the operator keeps using it
+	// for root SSH/console access. It is destroyed only when the server is
+	// removed.
 
 	server.Status = StatusReady
 	if err := s.store.Save(server); err != nil {
