@@ -10,14 +10,23 @@ import {
   Branch,
   ChevronDown,
   GithubMark,
-  Gear,
   Lock,
   Plus,
   Refresh,
   Search,
   Shield,
 } from "@/components/icons";
-import type { Server, Source } from "@/lib/data";
+import { AddServerForm } from "@/components/add-server-form";
+import { SetupLog } from "@/components/setup-log";
+import type { Source } from "@/lib/data";
+import type { ServerStatus, ServerView } from "@/lib/servers";
+
+const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
+  ready: "blue",
+  setting_up: "lime",
+  probed: "gray",
+  failed: "red",
+};
 
 export function NewDeployment({
   sources,
@@ -26,7 +35,7 @@ export function NewDeployment({
   stamp,
 }: {
   sources: Source[];
-  servers: Server[];
+  servers: ServerView[];
   account: string | null;
   stamp: string;
 }) {
@@ -35,6 +44,13 @@ export function NewDeployment({
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<string | null>(null);
   const [server, setServer] = useState<string | null>(null);
+  const [serverList, setServerList] = useState<ServerView[]>(servers);
+  const [showAddServer, setShowAddServer] = useState(false);
+  const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
+
+  function setServerStatus(id: string, status: ServerStatus) {
+    setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
+  }
 
   // ⌘K / ctrl-K focuses the palette; Enter continues when both are picked.
   useEffect(() => {
@@ -57,8 +73,8 @@ export function NewDeployment({
     [sources, q],
   );
   const filteredServers = useMemo(
-    () => (q ? servers.filter((s) => `${s.name} ${s.provider} ${s.region}`.toLowerCase().includes(q)) : servers),
-    [servers, q],
+    () => (q ? serverList.filter((s) => `${s.name} ${s.ip} ${s.specs.os}`.toLowerCase().includes(q)) : serverList),
+    [serverList, q],
   );
 
   const ready = Boolean(source && server);
@@ -67,6 +83,7 @@ export function NewDeployment({
     : "#";
 
   return (
+    <>
     <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-8 pb-10 pt-16">
       {/* hero */}
       <div className="rise">
@@ -195,51 +212,68 @@ export function NewDeployment({
                 {String(filteredServers.length).padStart(2, "0")}
               </span>
             </span>
-            <button className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream">
-              <Gear /> test all
-            </button>
           </div>
 
           <ul className="flex flex-1 flex-col gap-3 p-4">
             {filteredServers.map((s) => {
               const active = server === s.id;
+              const ramGB = s.specs.memoryMB ? `${Math.round(s.specs.memoryMB / 1024)} gb` : "-";
               return (
-                <li key={s.id}>
-                  <button
-                    onClick={() => setServer(s.id)}
-                    className={`flex w-full items-center gap-4 rounded-lg border px-4 py-3.5 text-left transition-colors ${
-                      active
-                        ? "border-lime/60 bg-lime/[0.05]"
-                        : "border-line bg-surface-2 hover:border-line-strong"
-                    }`}
-                  >
-                    <ServerAvatar seed={s.name} />
-                    <div className="flex-1">
-                      <span className="flex items-center gap-2.5 text-[15px] font-medium text-cream">
-                        {s.name}
-                        <Badge tone={s.status === "healthy" ? "blue" : "gray"}>
-                          {s.status}
-                        </Badge>
-                      </span>
-                      <span className="mt-1 block text-[12px] text-muted">
-                        {s.provider} {s.plan} · {s.ip} · {s.region}
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <span className="block text-[15px] font-medium text-cream">
-                        {s.uptimePct ?? "-"}
-                      </span>
-                      <span className="block text-[11px] text-muted">{s.uptimeLabel}</span>
-                    </div>
-                  </button>
+                <li
+                  key={s.id}
+                  className={`rounded-lg border transition-colors ${
+                    active ? "border-lime/60 bg-lime/[0.05]" : "border-line bg-surface-2 hover:border-line-strong"
+                  }`}
+                >
+                  <div className="flex items-center gap-4 px-4 py-3.5">
+                    <button onClick={() => setServer(s.id)} className="flex flex-1 items-center gap-4 text-left">
+                      <ServerAvatar seed={s.name} />
+                      <div className="flex-1">
+                        <span className="flex items-center gap-2.5 text-[15px] font-medium text-cream">
+                          {s.name}
+                          <Badge tone={statusTone[s.status]} dot>
+                            {s.status.replace("_", " ")}
+                          </Badge>
+                        </span>
+                        <span className="mt-1 block text-[12px] text-muted">
+                          {s.ip} · {s.specs.os || "unknown os"} · {s.specs.cpuCores || "-"} vcpu · {ramGB} ·{" "}
+                          {s.specs.diskGB ? `${s.specs.diskGB} gb disk` : "-"}
+                        </span>
+                      </div>
+                    </button>
+                    {s.status === "ready" ? (
+                      <span className="text-[12px] text-blue">✓ ready</span>
+                    ) : (
+                      <button
+                        onClick={() => setSetupTarget(s)}
+                        disabled={s.status === "setting_up"}
+                        className="rounded-md border border-lime/40 px-3 py-1.5 text-[12px] text-lime transition-colors hover:bg-lime/10 disabled:opacity-50"
+                      >
+                        {s.status === "failed" ? "retry setup" : s.status === "setting_up" ? "setting up…" : "set up"}
+                      </button>
+                    )}
+                  </div>
                 </li>
               );
             })}
 
             <li>
-              <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong px-4 py-4 text-[13px] text-muted transition-colors hover:border-lime/50 hover:text-cream">
-                <Plus /> add a server (ip + root password)
-              </button>
+              {showAddServer ? (
+                <AddServerForm
+                  onAdded={(srv) => {
+                    setServerList((prev) => [...prev, srv]);
+                    setShowAddServer(false);
+                  }}
+                  onCancel={() => setShowAddServer(false)}
+                />
+              ) : (
+                <button
+                  onClick={() => setShowAddServer(true)}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong px-4 py-4 text-[13px] text-muted transition-colors hover:border-lime/50 hover:text-cream"
+                >
+                  <Plus /> add a server (ip + root password)
+                </button>
+              )}
             </li>
           </ul>
         </section>
@@ -280,5 +314,14 @@ export function NewDeployment({
         </div>
       </div>
     </main>
+
+    {setupTarget && (
+      <SetupLog
+        server={setupTarget}
+        onStatus={(status) => setServerStatus(setupTarget.id, status)}
+        onClose={() => setSetupTarget(null)}
+      />
+    )}
+    </>
   );
 }
