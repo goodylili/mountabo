@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.25", "stable"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: backend/go.sum
+
+      - name: download modules
+        run: go mod download
+
+      - name: verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code
+
+      - name: test
+        run: go test -race -shuffle=on -coverprofile=coverage.out ./...
