@@ -59,6 +59,11 @@ export function MonitorView({
       </div>
 
       <div className="rise mt-6 flex flex-col gap-3" style={{ animationDelay: "120ms" }}>
+        {deployments.length === 0 && (
+          <p className="rounded-xl border border-dashed border-line px-5 py-12 text-center text-[13px] text-muted">
+            nothing deployed yet. connect a repository to a server and your live status shows up here.
+          </p>
+        )}
         {deployments.map((d) => {
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;

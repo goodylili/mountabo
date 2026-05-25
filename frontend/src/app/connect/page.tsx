@@ -11,7 +11,7 @@ export default async function ConnectPage({
 }) {
   const conn = await getGithubConnection();
   const { error } = await searchParams;
-  const alreadyConnected = conn.connected && !conn.demo;
+  const account = conn.connected ? conn.login : null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -61,15 +61,17 @@ export default async function ConnectPage({
                 ? "connection check failed (state mismatch). please try again."
                 : error === "backend"
                   ? "couldn't reach the mountabo backend. is it running on localhost:7778?"
-                  : "could not complete the github exchange. please try again."}
+                  : error === "config"
+                    ? "github isn't configured. set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET in .env."
+                    : "could not complete the github exchange. please try again."}
             </p>
           )}
 
-          {alreadyConnected ? (
+          {account ? (
             <div className="flex items-center justify-between rounded-xl border border-blue/25 bg-blue/5 px-5 py-4">
               <span className="flex items-center gap-3 text-cream">
                 <GithubMark className="text-blue" />
-                connected as {conn.login}
+                connected as {account}
               </span>
               <Link
                 href="/"

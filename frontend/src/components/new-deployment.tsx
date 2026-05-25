@@ -34,7 +34,7 @@ export function NewDeployment({
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<string | null>(null);
-  const [server, setServer] = useState<string | null>("falkenstein-1");
+  const [server, setServer] = useState<string | null>(null);
 
   // ⌘K / ctrl-K focuses the palette; Enter continues when both are picked.
   useEffect(() => {
@@ -124,10 +124,10 @@ export function NewDeployment({
               </button>
               <span className="text-faint">›</span>
               <button className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-cream">
-                {account ?? "goodylili"} <ChevronDown className="text-muted" />
+                {account ?? "not connected"} <ChevronDown className="text-muted" />
               </button>
             </div>
-            <span className="text-muted">↳ 27 visible</span>
+            <span className="text-muted">↳ {filteredSources.length} visible</span>
           </div>
 
           <ul className="flex-1">
@@ -168,7 +168,20 @@ export function NewDeployment({
               );
             })}
             {filteredSources.length === 0 && (
-              <li className="px-5 py-8 text-center text-[13px] text-muted">no sources match “{query}”.</li>
+              <li className="px-5 py-8 text-center text-[13px] text-muted">
+                {!account ? (
+                  <>
+                    connect github to list your repositories.{" "}
+                    <Link href="/connect" className="text-lime hover:text-cream">
+                      connect →
+                    </Link>
+                  </>
+                ) : q ? (
+                  <>no sources match “{query}”.</>
+                ) : (
+                  <>no repositories found.</>
+                )}
+              </li>
             )}
           </ul>
         </section>

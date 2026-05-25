@@ -1,11 +1,13 @@
 import { Header } from "@/components/header";
 import { NewDeployment } from "@/components/new-deployment";
-import { servers, sources } from "@/lib/data";
+import { servers } from "@/lib/data";
+import { getRepos } from "@/lib/repos";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function Home() {
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
+  const sources = account ? await getRepos() : [];
 
   const now = new Date();
   const stamp = `${now
