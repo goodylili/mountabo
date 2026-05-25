@@ -9,7 +9,9 @@
 # Order:
 #   1. FIRST, create the mountabo user + install SSH keys (mountabo's + the
 #      operator's) + sudo, so key-based access exists immediately.
-#   2. THEN the system work (apt, firewall, fail2ban, timezone, docker).
+#   2. THEN the minimal system work: apt update, timezone, Docker. No firewall,
+#      fail2ban, or other opinionated policy — the server's posture is left to
+#      the operator.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -39,22 +41,7 @@ log "upgrading system (this can take several minutes)"
 apt-get upgrade -y
 
 log "installing base packages"
-apt-get install -y curl ca-certificates ufw fail2ban unattended-upgrades rsync
-
-log "configuring firewall (ufw)"
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow OpenSSH
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw --force enable
-
-log "enabling fail2ban"
-systemctl enable --now fail2ban
-
-log "enabling automatic security updates"
-echo 'unattended-upgrades unattended-upgrades/enable_auto_updates boolean true' | debconf-set-selections
-dpkg-reconfigure -f noninteractive unattended-upgrades
+apt-get install -y curl ca-certificates
 
 log "setting timezone to {{.Timezone}}"
 timedatectl set-timezone '{{.Timezone}}'
