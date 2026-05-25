@@ -28,6 +28,17 @@ type Account struct {
 	Login string
 }
 
+// Repo is a GitHub repository the connected account can deploy from.
+type Repo struct {
+	Owner         string
+	Name          string
+	FullName      string
+	Private       bool
+	DefaultBranch string
+	Language      string
+	PushedAt      time.Time
+}
+
 // CodeExchanger turns a completed OAuth web-flow authorization code into a
 // token. redirectURI must match the one used to obtain the code.
 type CodeExchanger interface {
@@ -37,6 +48,12 @@ type CodeExchanger interface {
 // AccountFetcher reports which GitHub account a token authenticates as.
 type AccountFetcher interface {
 	Account(ctx context.Context, t Token) (Account, error)
+}
+
+// RepoLister lists every repository a token can access — public and private,
+// owned, collaborator, and organization.
+type RepoLister interface {
+	List(ctx context.Context, t Token) ([]Repo, error)
 }
 
 // TokenStore persists the connection token in the OS keychain. Load returns
@@ -53,12 +70,13 @@ type TokenStore interface {
 type GitHubConnector struct {
 	exchanger CodeExchanger
 	accounts  AccountFetcher
+	repos     RepoLister
 	tokens    TokenStore
 }
 
 // NewGitHubConnector wires the connector to its ports.
-func NewGitHubConnector(exchanger CodeExchanger, accounts AccountFetcher, tokens TokenStore) *GitHubConnector {
-	return &GitHubConnector{exchanger: exchanger, accounts: accounts, tokens: tokens}
+func NewGitHubConnector(exchanger CodeExchanger, accounts AccountFetcher, repos RepoLister, tokens TokenStore) *GitHubConnector {
+	return &GitHubConnector{exchanger: exchanger, accounts: accounts, repos: repos, tokens: tokens}
 }
 
 // Connect exchanges code for a token, verifies it by reading the account it
@@ -96,6 +114,21 @@ func (c *GitHubConnector) Status(ctx context.Context) (Account, error) {
 		return Account{}, fmt.Errorf("read connected account: %w", err)
 	}
 	return account, nil
+}
+
+// Repositories lists the connected account's repositories (public and private)
+// using the stored token. It returns ErrNotConnected when no token is stored.
+func (c *GitHubConnector) Repositories(ctx context.Context) ([]Repo, error) {
+	token, err := c.tokens.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load token: %w", err)
+	}
+
+	repos, err := c.repos.List(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("list repositories: %w", err)
+	}
+	return repos, nil
 }
 
 // Disconnect removes the stored token from the keychain. It is idempotent: a

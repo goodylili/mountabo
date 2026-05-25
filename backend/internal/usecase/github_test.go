@@ -6,8 +6,9 @@ import (
 	"testing"
 )
 
-// fakeExchanger, fakeFetcher, and fakeStore are in-memory stand-ins for the
-// connector's ports, letting the flow be tested without GitHub or a keychain.
+// fakeExchanger, fakeFetcher, fakeRepoLister, and fakeStore are in-memory
+// stand-ins for the connector's ports, letting the flow be tested without
+// GitHub or a keychain.
 type fakeExchanger struct {
 	token Token
 	err   error
@@ -24,6 +25,15 @@ type fakeFetcher struct {
 
 func (f fakeFetcher) Account(context.Context, Token) (Account, error) {
 	return f.account, f.err
+}
+
+type fakeRepoLister struct {
+	repos []Repo
+	err   error
+}
+
+func (f fakeRepoLister) List(context.Context, Token) ([]Repo, error) {
+	return f.repos, f.err
 }
 
 type fakeStore struct {
@@ -45,6 +55,7 @@ func TestConnect_StoresTokenAndReturnsAccount(t *testing.T) {
 	c := NewGitHubConnector(
 		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
 		fakeFetcher{account: Account{Login: "octocat"}},
+		fakeRepoLister{},
 		store,
 	)
 
@@ -65,6 +76,7 @@ func TestConnect_ExchangeFailureDoesNotStore(t *testing.T) {
 	c := NewGitHubConnector(
 		fakeExchanger{err: errors.New("bad code")},
 		fakeFetcher{account: Account{Login: "octocat"}},
+		fakeRepoLister{},
 		store,
 	)
 
@@ -81,6 +93,7 @@ func TestConnect_AccountFailureDoesNotStore(t *testing.T) {
 	c := NewGitHubConnector(
 		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
 		fakeFetcher{err: errors.New("unauthorized")},
+		fakeRepoLister{},
 		store,
 	)
 
@@ -96,6 +109,7 @@ func TestStatus_NotConnectedPropagates(t *testing.T) {
 	c := NewGitHubConnector(
 		fakeExchanger{},
 		fakeFetcher{},
+		fakeRepoLister{},
 		&fakeStore{loadErr: ErrNotConnected},
 	)
 
@@ -105,9 +119,39 @@ func TestStatus_NotConnectedPropagates(t *testing.T) {
 	}
 }
 
+func TestRepositories_ReturnsListedRepos(t *testing.T) {
+	c := NewGitHubConnector(
+		fakeExchanger{},
+		fakeFetcher{},
+		fakeRepoLister{repos: []Repo{{FullName: "octocat/hello"}, {FullName: "octocat/secret", Private: true}}},
+		&fakeStore{loadTok: Token{AccessToken: "gho_abc"}},
+	)
+
+	repos, err := c.Repositories(context.Background())
+	if err != nil {
+		t.Fatalf("Repositories returned error: %v", err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("got %d repos, want 2", len(repos))
+	}
+}
+
+func TestRepositories_NotConnectedPropagates(t *testing.T) {
+	c := NewGitHubConnector(
+		fakeExchanger{},
+		fakeFetcher{},
+		fakeRepoLister{},
+		&fakeStore{loadErr: ErrNotConnected},
+	)
+
+	if _, err := c.Repositories(context.Background()); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("err = %v, want ErrNotConnected in chain", err)
+	}
+}
+
 func TestDisconnect_DeletesToken(t *testing.T) {
 	store := &fakeStore{}
-	c := NewGitHubConnector(fakeExchanger{}, fakeFetcher{}, store)
+	c := NewGitHubConnector(fakeExchanger{}, fakeFetcher{}, fakeRepoLister{}, store)
 
 	if err := c.Disconnect(); err != nil {
 		t.Fatalf("Disconnect returned error: %v", err)

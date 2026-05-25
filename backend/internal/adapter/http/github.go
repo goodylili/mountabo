@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	nethttp "net/http"
+	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 )
@@ -36,6 +37,16 @@ type accountResponse struct {
 type statusResponse struct {
 	Connected bool   `json:"connected"`
 	Login     string `json:"login,omitempty"`
+}
+
+type repoResponse struct {
+	Owner         string `json:"owner"`
+	Name          string `json:"name"`
+	FullName      string `json:"fullName"`
+	Private       bool   `json:"private"`
+	DefaultBranch string `json:"defaultBranch"`
+	Language      string `json:"language"`
+	PushedAt      string `json:"pushedAt"`
 }
 
 // Exchange completes the OAuth web flow: it takes the authorization code the
@@ -76,6 +87,39 @@ func (h *GitHubHandler) Status(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 	h.writeJSON(w, nethttp.StatusOK, statusResponse{Connected: true, Login: account.Login})
+}
+
+// Repos lists the connected account's repositories (public and private) so the
+// UI can show them. Not-connected is reported as 401 rather than an error.
+func (h *GitHubHandler) Repos(w nethttp.ResponseWriter, r *nethttp.Request) {
+	repos, err := h.connector.Repositories(r.Context())
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("list repos failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not list repositories")
+		return
+	}
+
+	out := make([]repoResponse, 0, len(repos))
+	for _, rp := range repos {
+		pushed := ""
+		if !rp.PushedAt.IsZero() {
+			pushed = rp.PushedAt.UTC().Format(time.RFC3339)
+		}
+		out = append(out, repoResponse{
+			Owner:         rp.Owner,
+			Name:          rp.Name,
+			FullName:      rp.FullName,
+			Private:       rp.Private,
+			DefaultBranch: rp.DefaultBranch,
+			Language:      rp.Language,
+			PushedAt:      pushed,
+		})
+	}
+	h.writeJSON(w, nethttp.StatusOK, out)
 }
 
 // Disconnect removes the stored token from the keychain.

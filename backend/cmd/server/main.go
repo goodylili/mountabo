@@ -29,11 +29,14 @@ func run() error {
 	cfg := config.Load()
 	logger := slog.Default()
 
-	// Compose the GitHub connection flow: OAuth exchange (github) + account
-	// lookup (github) + token persistence (keychain), driven by the connector.
+	// Compose the GitHub connection flow: OAuth exchange + account lookup + repo
+	// listing (all github) + token persistence (keychain), driven by the
+	// connector. One github.Client serves both account and repo reads.
+	ghClient := github.NewClient()
 	connector := usecase.NewGitHubConnector(
 		github.NewOAuth(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret),
-		github.NewClient(),
+		ghClient,
+		ghClient,
 		keychain.NewStore(),
 	)
 
