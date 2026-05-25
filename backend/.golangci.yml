@@ -1,0 +1,41 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  enable:
+    - bodyclose # unclosed HTTP response bodies (leak/security)
+    - copyloopvar # loop-variable copy bugs (no-op on go1.22+, kept for clarity)
+    - errorlint # correct %w usage and errors.Is/As over ==
+    - gocritic # opinionated correctness/style/performance diagnostics
+    - gosec # security static analysis
+    - misspell # commented/typo spelling mistakes
+    - nilerr # returning nil after a non-nil error
+    - nolintlint # //nolint directives must be specific and justified
+    - revive # broad style/lint replacement for golint
+    - unconvert # redundant type conversions
+    - unparam # unused function parameters/results
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gosec:
+      excludes:
+        - G104 # duplicates errcheck; avoid double-reporting unchecked errors
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+  exclusions:
+    generated: lax
+    rules:
+      # Test fakes legitimately ignore parameters and return canned values.
+      - path: _test\.go
+        linters:
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

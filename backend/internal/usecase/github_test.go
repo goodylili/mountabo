@@ -1,0 +1,118 @@
+package usecase
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+// fakeExchanger, fakeFetcher, and fakeStore are in-memory stand-ins for the
+// connector's ports, letting the flow be tested without GitHub or a keychain.
+type fakeExchanger struct {
+	token Token
+	err   error
+}
+
+func (f fakeExchanger) Exchange(context.Context, string, string) (Token, error) {
+	return f.token, f.err
+}
+
+type fakeFetcher struct {
+	account Account
+	err     error
+}
+
+func (f fakeFetcher) Account(context.Context, Token) (Account, error) {
+	return f.account, f.err
+}
+
+type fakeStore struct {
+	saved   *Token
+	deleted bool
+	loadTok Token
+	loadErr error
+	saveErr error
+}
+
+func (f *fakeStore) Save(t Token) error { f.saved = &t; return f.saveErr }
+func (f *fakeStore) Load() (Token, error) {
+	return f.loadTok, f.loadErr
+}
+func (f *fakeStore) Delete() error { f.deleted = true; return nil }
+
+func TestConnect_StoresTokenAndReturnsAccount(t *testing.T) {
+	store := &fakeStore{}
+	c := NewGitHubConnector(
+		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
+		fakeFetcher{account: Account{Login: "octocat"}},
+		store,
+	)
+
+	account, err := c.Connect(context.Background(), "code-123", "http://localhost/cb")
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	if account.Login != "octocat" {
+		t.Errorf("login = %q, want octocat", account.Login)
+	}
+	if store.saved == nil || store.saved.AccessToken != "gho_abc" {
+		t.Errorf("token not persisted, got %+v", store.saved)
+	}
+}
+
+func TestConnect_ExchangeFailureDoesNotStore(t *testing.T) {
+	store := &fakeStore{}
+	c := NewGitHubConnector(
+		fakeExchanger{err: errors.New("bad code")},
+		fakeFetcher{account: Account{Login: "octocat"}},
+		store,
+	)
+
+	if _, err := c.Connect(context.Background(), "code", "uri"); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if store.saved != nil {
+		t.Error("token should not be stored when exchange fails")
+	}
+}
+
+func TestConnect_AccountFailureDoesNotStore(t *testing.T) {
+	store := &fakeStore{}
+	c := NewGitHubConnector(
+		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
+		fakeFetcher{err: errors.New("unauthorized")},
+		store,
+	)
+
+	if _, err := c.Connect(context.Background(), "code", "uri"); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if store.saved != nil {
+		t.Error("token should not be stored when the account lookup fails")
+	}
+}
+
+func TestStatus_NotConnectedPropagates(t *testing.T) {
+	c := NewGitHubConnector(
+		fakeExchanger{},
+		fakeFetcher{},
+		&fakeStore{loadErr: ErrNotConnected},
+	)
+
+	_, err := c.Status(context.Background())
+	if !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("err = %v, want ErrNotConnected in chain", err)
+	}
+}
+
+func TestDisconnect_DeletesToken(t *testing.T) {
+	store := &fakeStore{}
+	c := NewGitHubConnector(fakeExchanger{}, fakeFetcher{}, store)
+
+	if err := c.Disconnect(); err != nil {
+		t.Fatalf("Disconnect returned error: %v", err)
+	}
+	if !store.deleted {
+		t.Error("Disconnect did not delete the stored token")
+	}
+}
