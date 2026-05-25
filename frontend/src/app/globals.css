@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+/* Tailwind utilities resolve through these indirections, so every color is
+   theme-aware: the raw values are swapped per theme on :root below. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-cream: var(--cream);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+
+  --color-lime: var(--lime);
+  --color-lime-dim: var(--lime-dim);
+  --color-lime-fill: var(--lime-fill);
+  --color-blue: var(--blue);
+
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
+}
+
+/* dark (default) */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #0b0b0c;
+  --surface-2: #101012;
+  --surface-hover: #151517;
+  --line: rgba(238, 232, 218, 0.08);
+  --line-strong: rgba(238, 232, 218, 0.16);
+  --cream: #ece7d9;
+  --body: #a7a195;
+  --muted: #6f6a60;
+  --faint: #45413a;
+  --lime: #b6f04a; /* text / border / tint */
+  --lime-dim: #84cc16;
+  --lime-fill: #b6f04a; /* solid fills, black text legible */
+  --blue: #4f9df5;
+}
+
+/* light */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f1e8;
+  --surface: #fcfaf4;
+  --surface-2: #efece1;
+  --surface-hover: #e9e5d7;
+  --line: rgba(34, 30, 22, 0.12);
+  --line-strong: rgba(34, 30, 22, 0.22);
+  --cream: #1c1a14; /* primary text */
+  --body: #514c40;
+  --muted: #847e71;
+  --faint: #b3ac9c;
+  --lime: #4d7c0f; /* readable on paper */
+  --lime-dim: #3f6b0a;
+  --lime-fill: #9bd42c; /* bright fill, black text legible */
+  --blue: #2f7fd6;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-mono);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--lime) 32%, transparent);
+}
+
+/* thin terminal-style scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
+}
+
+.label {
+  font-size: 0.6875rem;
+  color: var(--color-muted);
+}
+
+/* primary call-to-action: a flat, confident button: no colored glow */
+.cta-glow {
+  box-shadow: 0 10px 30px -16px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise {
+  animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
+}

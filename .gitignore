@@ -1,0 +1,68 @@
+# Binaries
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test & coverage
+*.test
+*.out
+coverage.*
+*.cover
+*.prof
+profile.out
+
+# Go workspace
+go.work.sum
+
+# Vendor
+vendor/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+
+# Logs & runtime
+*.log
+logs/
+tmp/
+.tmp/
+*.pid
+*.seed
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.history/
+.fleet/
+*.iml
+
+# Tooling / local agent state
+.claude
+agents/
+.air.toml
+.task/
+.cache/
+node_modules/
