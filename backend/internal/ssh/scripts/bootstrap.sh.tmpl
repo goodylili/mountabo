@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 # mountabo server bootstrap — fresh Ubuntu -> hardened, Docker-ready.
 # Rendered and run by mountabo over SSH as root. Fully non-interactive.
-# SSH hardening runs LAST: if an earlier step fails the run aborts with root
-# still reachable, so the setup can be retried.
+#
+# Order matters:
+#   1. FIRST, create the mountabo user + install its SSH key + sudo. This hands
+#      mountabo its own key-based access immediately — before the long/riskier
+#      steps — so it owns the box from the start and a later failure never leaves
+#      it locked out.
+#   2. THEN the system work (apt, firewall, fail2ban, timezone, docker).
+#   3. LAST, harden SSH (disable root + password login). If an earlier step
+#      fails the run aborts with root still reachable, so setup can be retried.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 log() { echo "==> $*"; }
-
-log "updating package lists"
-apt-get update -y
-
-log "upgrading system (this can take several minutes)"
-apt-get upgrade -y
-
-log "installing base packages"
-apt-get install -y curl ca-certificates ufw fail2ban unattended-upgrades rsync
 
 log "creating user {{.User}}"
 if ! id -u {{.User}} >/dev/null 2>&1; then
@@ -25,13 +23,22 @@ usermod -aG sudo {{.User}}
 echo '{{.User}} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-mountabo
 chmod 440 /etc/sudoers.d/90-mountabo
 
-log "installing ssh key for {{.User}}"
+log "installing ssh key for {{.User}} (mountabo now has its own access)"
 install -d -m 700 -o {{.User}} -g {{.User}} /home/{{.User}}/.ssh
 cat > /home/{{.User}}/.ssh/authorized_keys <<'MOUNTABO_AUTHORIZED_KEY'
 {{.PublicKey}}
 MOUNTABO_AUTHORIZED_KEY
 chown {{.User}}:{{.User}} /home/{{.User}}/.ssh/authorized_keys
 chmod 600 /home/{{.User}}/.ssh/authorized_keys
+
+log "updating package lists"
+apt-get update -y
+
+log "upgrading system (this can take several minutes)"
+apt-get upgrade -y
+
+log "installing base packages"
+apt-get install -y curl ca-certificates ufw fail2ban unattended-upgrades rsync
 
 log "configuring firewall (ufw)"
 ufw default deny incoming
