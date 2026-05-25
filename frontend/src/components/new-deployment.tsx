@@ -47,6 +47,7 @@ export function NewDeployment({
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const [showAddServer, setShowAddServer] = useState(false);
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
+  const [page, setPage] = useState(0);
 
   function setServerStatus(id: string, status: ServerStatus) {
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
@@ -72,6 +73,16 @@ export function NewDeployment({
     () => (q ? sources.filter((s) => `${s.name} ${s.language}`.toLowerCase().includes(q)) : sources),
     [sources, q],
   );
+  // Repo lists can be large (hundreds), so paginate the sources client-side.
+  // The page resets to 0 in the search handler whenever the filter changes.
+  const SOURCES_PER_PAGE = 8;
+  const pageCount = Math.max(1, Math.ceil(filteredSources.length / SOURCES_PER_PAGE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pagedSources = filteredSources.slice(
+    safePage * SOURCES_PER_PAGE,
+    safePage * SOURCES_PER_PAGE + SOURCES_PER_PAGE,
+  );
+
   const filteredServers = useMemo(
     () => (q ? serverList.filter((s) => `${s.name} ${s.ip} ${s.specs.os}`.toLowerCase().includes(q)) : serverList),
     [serverList, q],
@@ -109,7 +120,10 @@ export function NewDeployment({
           <input
             ref={searchRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(0);
+            }}
             placeholder="filter sources and servers, or jump anywhere…"
             className="flex-1 bg-transparent text-[14px] text-cream placeholder:text-muted focus:outline-none"
           />
@@ -148,7 +162,7 @@ export function NewDeployment({
           </div>
 
           <ul className="flex-1">
-            {filteredSources.map((s) => {
+            {pagedSources.map((s) => {
               const full = `${s.owner}/${s.name}`;
               const active = source === full;
               return (
@@ -201,6 +215,28 @@ export function NewDeployment({
               </li>
             )}
           </ul>
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between border-t border-line px-5 py-3 text-[12px]">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+                className="rounded-md border border-line px-2.5 py-1 text-muted transition-colors hover:text-cream disabled:opacity-40"
+              >
+                ‹ prev
+              </button>
+              <span className="text-muted">
+                page {safePage + 1} of {pageCount}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                disabled={safePage >= pageCount - 1}
+                className="rounded-md border border-line px-2.5 py-1 text-muted transition-colors hover:text-cream disabled:opacity-40"
+              >
+                next ›
+              </button>
+            </div>
+          )}
         </section>
 
         {/* servers */}
