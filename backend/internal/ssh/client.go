@@ -42,20 +42,25 @@ func NewClient() *Client {
 	return &Client{dialTimeout: 15 * time.Second}
 }
 
-// dial opens an SSH connection, capturing the host key fingerprint on first
-// contact (trust-on-first-use). For a user-owned fresh VPS there is no prior key
-// to verify against; the caller persists the returned fingerprint so future
-// connections can be checked against it.
+// dial opens an SSH connection and verifies the server's host key. When
+// t.Fingerprint is empty (first contact with a fresh VPS) it captures the key's
+// fingerprint trust-on-first-use, so the caller can pin it. When t.Fingerprint
+// is set, the presented key MUST match it or the connection is refused — host
+// key verification runs before authentication, so this also stops a
+// man-in-the-middle from ever receiving the root password.
 func (c *Client) dial(ctx context.Context, t usecase.SSHTarget) (*ssh.Client, string, error) {
 	var fingerprint string
-	capture := func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	verify := func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint = ssh.FingerprintSHA256(key)
+		if t.Fingerprint != "" && fingerprint != t.Fingerprint {
+			return fmt.Errorf("host key mismatch for %s: presented %s, expected %s — refusing to connect (possible man-in-the-middle)", t.Host, fingerprint, t.Fingerprint)
+		}
 		return nil
 	}
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
 		Auth:            []ssh.AuthMethod{ssh.Password(t.Password)},
-		HostKeyCallback: capture, // TOFU — see dial doc comment
+		HostKeyCallback: verify,
 		Timeout:         c.dialTimeout,
 	}
 

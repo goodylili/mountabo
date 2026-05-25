@@ -61,6 +61,12 @@ type SSHTarget struct {
 	Port     int
 	User     string
 	Password string
+	// Fingerprint is the expected SHA256 host key fingerprint. Empty means
+	// trust-on-first-use: the dialer captures and returns the key's fingerprint
+	// so it can be pinned. Non-empty means the connection MUST present this exact
+	// key or be refused (man-in-the-middle protection). Host key verification
+	// happens before authentication, so pinning also protects the password.
+	Fingerprint string
 }
 
 // BootstrapParams fills the bootstrap script template.
@@ -218,7 +224,9 @@ func (s *ServerService) Setup(ctx context.Context, id string, out io.Writer) err
 		return fmt.Errorf("save server: %w", err)
 	}
 
-	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: "root", Password: password}
+	// Pin the host key captured when the server was added: if it doesn't match,
+	// the bootstrap (and the root password) must not go to an impostor.
+	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: "root", Password: password, Fingerprint: server.Fingerprint}
 	params := BootstrapParams{User: BootstrapUser, Timezone: server.Timezone, PublicKey: publicKey}
 
 	if bootErr := s.boot.Bootstrap(ctx, target, params, out); bootErr != nil {
