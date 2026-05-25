@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Header } from "@/components/header";
 import { ArrowRight, GithubMark, Shield } from "@/components/icons";
-import { GITHUB_SCOPES } from "@/lib/github";
+import { GITHUB_PERMISSIONS } from "@/lib/github";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function ConnectPage({
@@ -26,21 +26,21 @@ export default async function ConnectPage({
             grant mountabo <span className="text-lime italic">just</span> what it needs.
           </h1>
           <p className="mt-6 max-w-xl text-[15px] leading-7 text-body">
-            mountabo connects through GitHub&apos;s OAuth flow. it asks for the narrowest
-            set of scopes that still let it add a deploy key, write one workflow file, and
-            store the secrets that workflow reads. your token is exchanged on your machine
-            and kept in your OS keychain: it never leaves.
+            mountabo connects as a GitHub App through GitHub&apos;s authorization flow. it
+            asks for the narrowest set of permissions that still let it add a deploy key,
+            write one workflow file, and store the secrets that workflow reads. your token
+            is exchanged on your machine and kept in your OS keychain: it never leaves.
           </p>
         </div>
 
         <div className="rise mt-12" style={{ animationDelay: "80ms" }}>
-          <p className="label">scopes requested</p>
+          <p className="label">permissions requested</p>
           <ul className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line bg-surface">
-            {GITHUB_SCOPES.map((s) => (
-              <li key={s.scope} className="flex flex-col gap-2 p-5 sm:flex-row sm:gap-6">
+            {GITHUB_PERMISSIONS.map((s) => (
+              <li key={s.permission} className="flex flex-col gap-2 p-5 sm:flex-row sm:gap-6">
                 <div className="flex w-48 shrink-0 items-center gap-3">
                   <code className="rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-[13px] text-cream">
-                    {s.scope}
+                    {s.permission}
                   </code>
                   <span className="text-[10px] text-lime">
                     {s.access}
@@ -59,7 +59,9 @@ export default async function ConnectPage({
             <p className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-300">
               {error === "state"
                 ? "connection check failed (state mismatch). please try again."
-                : "could not complete the github exchange. please try again."}
+                : error === "backend"
+                  ? "couldn't reach the mountabo backend. is it running on localhost:7777?"
+                  : "could not complete the github exchange. please try again."}
             </p>
           )}
 
