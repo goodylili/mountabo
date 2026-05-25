@@ -65,7 +65,7 @@ export function AddServerForm({
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="edge-1" className={inputCls} required />
         </Field>
         <Field label="ip address">
-          <input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="194.147.58.2" className={inputCls} required />
+          <input value={ip} onChange={(e) => setIp(e.target.value)} placeholder="203.0.113.10" className={inputCls} required />
         </Field>
         <Field label="ssh port">
           <input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" className={inputCls} />
