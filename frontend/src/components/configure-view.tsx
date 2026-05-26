@@ -127,7 +127,7 @@ export function ConfigureView({
         </Section>
 
         <Section label="environment variables" hint="become encrypted repo secrets">
-          {/* Import a whole .env at once — paste it or pick a file. Parsing is
+          {/* Import a whole .env at once: paste it or pick a file. Parsing is
               local; values never leave the browser here. */}
           <div className="mb-3 flex items-center gap-2">
             <button
@@ -219,14 +219,14 @@ export function ConfigureView({
           </div>
         </Section>
 
-        {/* CTA — this iteration generates the preview; GitHub writes land next. */}
+        {/* CTA: this iteration generates the preview; GitHub writes land next. */}
         <div className="mt-8">
           <button
             disabled
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-surface-2 px-6 py-4 font-bold text-muted"
             title="GitHub writes (deploy key, secrets, workflow) are the next step"
           >
-            deploy — writes land next
+            deploy (writes land next)
           </button>
           <p className="mt-2 text-center text-[11px] text-muted">
             preview is live on the right. the next pass adds the deploy key, sets {secrets.length} secrets, and
@@ -269,7 +269,7 @@ export function ConfigureView({
               </ul>
               <p className="px-5 py-3 text-[12px] leading-5 text-muted">
                 <code className="text-cream">SERVER_*</code> are filled from the selected server + its mountabo key.
-                your env vars are encrypted (sealed box) before upload — values never leave your machine in the clear.
+                your env vars are encrypted (sealed box) before upload; values never leave your machine in the clear.
               </p>
             </div>
           )}

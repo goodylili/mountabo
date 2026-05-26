@@ -12,7 +12,7 @@ export type EnvVar = { key: string; value: string };
 // parseEnvFile turns the contents of a .env file (or pasted blob) into rows.
 // It accepts `KEY=value`, `export KEY=value`, blank lines, and `#` comments,
 // and strips one layer of surrounding single/double quotes from values. It does
-// not strip inline comments — secret values legitimately contain `#`.
+// not strip inline comments, secret values legitimately contain `#`.
 export function parseEnvFile(text: string): EnvVar[] {
   const out: EnvVar[] = [];
   for (const raw of text.split(/\r?\n/)) {

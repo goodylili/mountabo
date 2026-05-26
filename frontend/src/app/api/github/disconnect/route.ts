@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   try {
     await fetch(`${backend}/api/github/token`, { method: "DELETE" });
   } catch {
-    // Backend unreachable — still clear the local session below.
+    // Backend unreachable, still clear the local session below.
   }
 
   const res = NextResponse.redirect(`${origin}/connect`);

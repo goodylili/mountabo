@@ -35,7 +35,7 @@ type addServerRequest struct {
 }
 
 // Add probes a server over SSH with the root password and records it. The root
-// password is consumed here and stored only in the keychain — never echoed back.
+// password is consumed here and stored only in the keychain, never echoed back.
 func (h *ServersHandler) Add(w nethttp.ResponseWriter, r *nethttp.Request) {
 	var req addServerRequest
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -57,7 +57,7 @@ func (h *ServersHandler) Add(w nethttp.ResponseWriter, r *nethttp.Request) {
 	})
 	if err != nil {
 		h.log.Error("add server failed", "err", err)
-		h.writeError(w, nethttp.StatusBadGateway, "could not reach the server — check the ip and root password")
+		h.writeError(w, nethttp.StatusBadGateway, "could not reach the server, check the ip and root password")
 		return
 	}
 	h.writeJSON(w, nethttp.StatusCreated, server)

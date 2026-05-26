@@ -24,7 +24,7 @@
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
-/* dark (default) — Vercel / Geist palette. Green accent retained. */
+/* dark (default), Vercel / Geist palette. Green accent retained. */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -44,7 +44,7 @@
   --blue: #3291ff; /* geist blue (dark) */
 }
 
-/* light — Vercel / Geist palette. Green accent retained. */
+/* light, Vercel / Geist palette. Green accent retained. */
 :root[data-theme="light"] {
   color-scheme: light;
   --bg: #ffffff; /* geist background */

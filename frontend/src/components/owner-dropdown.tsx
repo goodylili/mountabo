@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { ChevronDown, GithubMark } from "@/components/icons";
 
-// OwnerDropdown lets the user narrow the repo list to one owner — their account
-// or any organization they have repos in — making a long list easier to search.
+// OwnerDropdown lets the user narrow the repo list to one owner, their account
+// or any organization they have repos in, making a long list easier to search.
 // Owners are derived from the fetched repos, so no extra API call is needed.
 export function OwnerDropdown({
   owners,

@@ -9,8 +9,8 @@ import (
 )
 
 // AddDeployKey registers publicKey as a deploy key on owner/repo and returns the
-// created key's id. readOnly should be true for mountabo's key — the server only
-// needs to pull, never push — which keeps the key's access scoped to one repo.
+// created key's id. readOnly should be true for mountabo's key, the server only
+// needs to pull, never push, which keeps the key's access scoped to one repo.
 // Adding the same key again returns an error from GitHub ("key is already in
 // use"); callers that may re-run should treat that as benign.
 func (c *Client) AddDeployKey(ctx context.Context, t usecase.Token, owner, repo, title, publicKey string, readOnly bool) (int64, error) {

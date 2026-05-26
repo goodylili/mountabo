@@ -1,6 +1,6 @@
 // Package keychain persists mountabo's secrets in the operating system's native
-// credential store — macOS Keychain, Windows Credential Manager, or libsecret on
-// Linux — so tokens are encrypted at rest by the OS and never written to
+// credential store, macOS Keychain, Windows Credential Manager, or libsecret on
+// Linux, so tokens are encrypted at rest by the OS and never written to
 // mountabo's own files. The concrete Store satisfies the usecase.TokenStore port.
 package keychain
 
@@ -20,7 +20,7 @@ const (
 	tokenKey = "github-token"
 )
 
-// Store reads and writes mountabo's secrets in the OS keychain — the GitHub
+// Store reads and writes mountabo's secrets in the OS keychain, the GitHub
 // token and, generically, per-server secrets (root passwords, generated keys).
 type Store struct{}
 

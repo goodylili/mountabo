@@ -14,9 +14,9 @@ function browserTimezone(): string {
 }
 
 // Non-sensitive form fields are remembered between visits so a refresh doesn't
-// lose them. The root password is NEVER stored here — it goes only to the
+// lose them. The root password is NEVER stored here, it goes only to the
 // backend, which keeps it in the OS keychain. (AddServerForm only mounts after a
-// client click, so reading localStorage at init is safe — no SSR hydration.)
+// client click, so reading localStorage at init is safe, no SSR hydration.)
 const DRAFT_KEY = "mountabo:add-server-draft";
 
 type Draft = { name?: string; ip?: string; port?: string; timezone?: string; userPublicKey?: string };
@@ -53,7 +53,7 @@ export function AddServerForm({
     try {
       window.localStorage.setItem(DRAFT_KEY, JSON.stringify({ name, ip, port, timezone, userPublicKey }));
     } catch {
-      // localStorage unavailable (private mode / disabled) — drafts just won't persist.
+      // localStorage unavailable (private mode / disabled), drafts just won't persist.
     }
   }, [name, ip, port, timezone, userPublicKey]);
 
@@ -127,7 +127,7 @@ export function AddServerForm({
           </Field>
         </div>
         <div className="col-span-2">
-          <Field label="your ssh public key (optional — leave blank to auto-detect ~/.ssh)">
+          <Field label="your ssh public key (optional, leave blank to auto-detect ~/.ssh)">
             <input
               value={userPublicKey}
               onChange={(e) => setUserPublicKey(e.target.value)}

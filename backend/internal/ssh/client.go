@@ -78,7 +78,7 @@ func NewClient() *Client {
 // dial opens an SSH connection and verifies the server's host key. When
 // t.Fingerprint is empty (first contact with a fresh VPS) it captures the key's
 // fingerprint trust-on-first-use, so the caller can pin it. When t.Fingerprint
-// is set, the presented key MUST match it or the connection is refused — host
+// is set, the presented key MUST match it or the connection is refused, host
 // key verification runs before authentication, so this also stops a
 // man-in-the-middle from ever receiving the root password.
 func (c *Client) dial(ctx context.Context, t usecase.SSHTarget) (*ssh.Client, string, error) {
@@ -86,7 +86,7 @@ func (c *Client) dial(ctx context.Context, t usecase.SSHTarget) (*ssh.Client, st
 	verify := func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		fingerprint = ssh.FingerprintSHA256(key)
 		if t.Fingerprint != "" && fingerprint != t.Fingerprint {
-			return fmt.Errorf("host key mismatch for %s: presented %s, expected %s — refusing to connect (possible man-in-the-middle)", t.Host, fingerprint, t.Fingerprint)
+			return fmt.Errorf("host key mismatch for %s: presented %s, expected %s, refusing to connect (possible man-in-the-middle)", t.Host, fingerprint, t.Fingerprint)
 		}
 		return nil
 	}
@@ -306,7 +306,7 @@ func composeScript(p usecase.BootstrapParams) (string, error) {
 		b.WriteString("\n")
 		b.WriteString(frag)
 	}
-	fmt.Fprintf(&b, "\nlog \"done — server is ready as %s\"\n", p.User)
+	fmt.Fprintf(&b, "\nlog \"done, server is ready as %s\"\n", p.User)
 	return b.String(), nil
 }
 
@@ -335,7 +335,7 @@ func (c *Client) LocalPublicKey() (string, error) {
 		return "", nil //nolint:nilerr // no home dir → no local key to offer, not a failure
 	}
 	for _, name := range []string{"id_ed25519.pub", "id_ecdsa.pub", "id_rsa.pub"} {
-		//nolint:gosec // G304: path is the OS home dir joined with a fixed allowlist of public-key filenames — no user-controlled input
+		//nolint:gosec // G304: path is the OS home dir joined with a fixed allowlist of public-key filenames, no user-controlled input
 		data, err := os.ReadFile(filepath.Join(home, ".ssh", name))
 		if err != nil {
 			continue

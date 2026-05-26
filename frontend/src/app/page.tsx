@@ -6,7 +6,7 @@ import { getServers } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function Home() {
-  // Cookie read only — fast, so the header + skeleton stream out immediately.
+  // Cookie read only, fast, so the header + skeleton stream out immediately.
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
 

@@ -1,7 +1,7 @@
 // Single source of truth for the GitHub access mountabo asks for.
 //
 // mountabo connects as a GitHub App via the user-to-server web authorization
-// flow. Unlike classic OAuth apps, a GitHub App takes no `scope` parameter — the
+// flow. Unlike classic OAuth apps, a GitHub App takes no `scope` parameter, the
 // access it has is fixed by the App's configured permissions. The list below is
 // the human-readable view of those permissions, each mapping to one of mountabo's
 // on-repo actions: add a deploy key, write the deploy workflow file, and set the
@@ -57,7 +57,7 @@ export const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 /**
  * Build the GitHub App user-authorization URL. Called server-side from the
  * authorize route. A GitHub App takes no `scope` parameter (permissions come
- * from the App configuration — see GITHUB_PERMISSIONS), so we send only the
+ * from the App configuration, see GITHUB_PERMISSIONS), so we send only the
  * client_id, redirect_uri, and a CSRF state.
  */
 export function buildAuthorizeUrl(opts: {

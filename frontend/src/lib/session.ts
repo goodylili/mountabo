@@ -9,7 +9,7 @@ export type GithubConnection =
 
 // Reads the connected GitHub account from the session cookie the OAuth callback
 // sets after the Go backend exchanges the code and stores the token. No cookie
-// means not connected — there is no demo/default account.
+// means not connected, there is no demo/default account.
 export async function getGithubConnection(): Promise<GithubConnection> {
   const login = (await cookies()).get(GH_COOKIE)?.value;
   return login ? { connected: true, login } : { connected: false };

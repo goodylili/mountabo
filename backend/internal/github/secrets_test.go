@@ -9,7 +9,7 @@ import (
 )
 
 // TestSealSecret verifies sealSecret produces a libsodium sealed box that the
-// matching private key can open back to the original value — i.e. the exact
+// matching private key can open back to the original value, i.e. the exact
 // contract GitHub Actions relies on to decrypt secrets.
 func TestSealSecret(t *testing.T) {
 	pub, priv, err := box.GenerateKey(rand.Reader)
@@ -30,7 +30,7 @@ func TestSealSecret(t *testing.T) {
 	}
 	opened, ok := box.OpenAnonymous(nil, sealed, pub, priv)
 	if !ok {
-		t.Fatal("OpenAnonymous failed — ciphertext not decryptable with the keypair")
+		t.Fatal("OpenAnonymous failed, ciphertext not decryptable with the keypair")
 	}
 	if string(opened) != plaintext {
 		t.Errorf("roundtrip mismatch: got %q", string(opened))

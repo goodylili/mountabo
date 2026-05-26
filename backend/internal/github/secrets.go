@@ -13,8 +13,8 @@ import (
 
 // SetSecret creates or updates a GitHub Actions secret on owner/repo. GitHub
 // requires secret values to be encrypted client-side with the repository's
-// public key using a libsodium sealed box — exactly what box.SealAnonymous
-// produces — so the plaintext never reaches GitHub's API in the clear.
+// public key using a libsodium sealed box, exactly what box.SealAnonymous
+// produces, so the plaintext never reaches GitHub's API in the clear.
 func (c *Client) SetSecret(ctx context.Context, t usecase.Token, owner, repo, name, value string) error {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {

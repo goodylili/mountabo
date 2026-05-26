@@ -58,7 +58,7 @@ func defaultDataDir() string {
 
 // loadDotenv loads the repository-root .env if one exists, searching upward from
 // the working directory so it is found whether the binary runs from the repo
-// root or from backend/. Real environment variables always win — godotenv.Load
+// root or from backend/. Real environment variables always win, godotenv.Load
 // never overrides values already set. A shipped binary with no .env simply uses
 // the OS environment.
 func loadDotenv() {

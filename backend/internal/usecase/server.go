@@ -121,7 +121,7 @@ type BootstrapParams struct {
 
 // OptionParam describes one input an option needs before it can be applied
 // (e.g. an SSH port or a domain). The UI prompts for these inline when the
-// option is ticked. Only non-secret values — they travel in the apply request.
+// option is ticked. Only non-secret values, they travel in the apply request.
 type OptionParam struct {
 	Key         string `json:"key"`
 	Label       string `json:"label"`
@@ -146,33 +146,33 @@ type SetupOption struct {
 // order (harden-ssh last, since it can disable root/password login); the UI
 // groups by Category. None are applied unless the operator selects them.
 var SetupOptions = []SetupOption{
-	{ID: "firewall", Category: "Network", Name: "UFW firewall", Description: "Block inbound traffic except SSH, HTTP and HTTPS. Reduces exposure — but Docker can publish container ports past UFW unless you bind them to localhost."},
+	{ID: "firewall", Category: "Network", Name: "UFW firewall", Description: "Block inbound traffic except SSH, HTTP and HTTPS. Reduces exposure, but Docker can publish container ports past UFW unless you bind them to localhost."},
 
-	{ID: "ssh-limits", Category: "SSH", Name: "Limit SSH auth attempts", Description: "Set MaxAuthTries 3 and LoginGraceTime 30. Cheaper than fail2ban — but multi-key ssh-agents can hit the limit on legitimate logins."},
-	{ID: "ssh-allowusers", Category: "SSH", Name: "Restrict SSH to mountabo + root", Description: "Whitelist who may SSH in (AllowUsers mountabo root). Blocks everyone else silently — handy, until you forget you added it."},
-	{ID: "ssh-port", Category: "SSH", Name: "Change SSH port", Description: "Move sshd off port 22 to cut brute-force log noise. Obscurity, not real protection — and you must remember the port everywhere.", Params: []OptionParam{{Key: "port", Label: "SSH port", Default: "2222", Placeholder: "2222"}}},
+	{ID: "ssh-limits", Category: "SSH", Name: "Limit SSH auth attempts", Description: "Set MaxAuthTries 3 and LoginGraceTime 30. Cheaper than fail2ban, but multi-key ssh-agents can hit the limit on legitimate logins."},
+	{ID: "ssh-allowusers", Category: "SSH", Name: "Restrict SSH to mountabo + root", Description: "Whitelist who may SSH in (AllowUsers mountabo root). Blocks everyone else silently; handy, until you forget you added it."},
+	{ID: "ssh-port", Category: "SSH", Name: "Change SSH port", Description: "Move sshd off port 22 to cut brute-force log noise. Obscurity, not real protection, and you must remember the port everywhere.", Params: []OptionParam{{Key: "port", Label: "SSH port", Default: "2222", Placeholder: "2222"}}},
 	{ID: "fail2ban", Category: "SSH", Name: "fail2ban", Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force. Can briefly lock you out if you mistype your own login several times."},
-	{ID: "crowdsec", Category: "SSH", Name: "CrowdSec", Description: "Modern fail2ban with community-shared blocklists — blocks IPs flagged across the network. Better signal, heavier; the shared list occasionally bans something unexpected."},
+	{ID: "crowdsec", Category: "SSH", Name: "CrowdSec", Description: "Modern fail2ban with community-shared blocklists that block IPs flagged across the network. Better signal, heavier; the shared list occasionally bans something unexpected."},
 
-	{ID: "caddy", Category: "TLS", Name: "Caddy reverse proxy + HTTPS", Description: "Front a local app with Caddy — automatic Let's Encrypt TLS for your domain. Needs DNS for the domain already pointing at this server.", Params: []OptionParam{{Key: "domain", Label: "domain", Placeholder: "app.example.com"}, {Key: "upstream", Label: "app port", Default: "3000", Placeholder: "3000"}}},
+	{ID: "caddy", Category: "TLS", Name: "Caddy reverse proxy + HTTPS", Description: "Front a local app with Caddy for automatic Let's Encrypt TLS for your domain. Needs DNS for the domain already pointing at this server.", Params: []OptionParam{{Key: "domain", Label: "domain", Placeholder: "app.example.com"}, {Key: "upstream", Label: "app port", Default: "3000", Placeholder: "3000"}}},
 
 	{ID: "netdata", Category: "Monitoring", Name: "Netdata (local)", Description: "Real-time CPU/RAM/disk/network/Docker dashboard, bound to 127.0.0.1:19999. Reach it via an SSH tunnel or a reverse proxy with auth."},
 	{ID: "uptime-kuma", Category: "Monitoring", Name: "Uptime Kuma", Description: "Self-hosted uptime monitor with notifications, on 127.0.0.1:3001. Runs on the box it monitors, so host critical alerts elsewhere too."},
-	{ID: "ntfy", Category: "Monitoring", Name: "ntfy", Description: "Self-hosted push notifications on 127.0.0.1:8080 — pipe alerts in via curl. Dead simple; self-host avoids the public server's rate limits."},
+	{ID: "ntfy", Category: "Monitoring", Name: "ntfy", Description: "Self-hosted push notifications on 127.0.0.1:8080; pipe alerts in via curl. Dead simple; self-host avoids the public server's rate limits."},
 	{ID: "journald-persistent", Category: "Monitoring", Name: "Persistent journald logs", Description: "Keep system logs across reboots (capped at 2G) so postmortems are possible."},
 
 	{ID: "auto-updates", Category: "System", Name: "Automatic security updates", Description: "Install unattended-upgrades so security patches apply on their own. Keeps the box patched; may occasionally trigger a reboot."},
 	{ID: "sysctl", Category: "System", Name: "sysctl hardening", Description: "Kernel knobs: SYN cookies, restricted dmesg, reverse-path filtering, no ICMP redirects. Free defense-in-depth."},
-	{ID: "chrony", Category: "System", Name: "Accurate time (chrony)", Description: "Keep the clock accurate — required for valid TLS certs, JWT validation, and log correlation."},
+	{ID: "chrony", Category: "System", Name: "Accurate time (chrony)", Description: "Keep the clock accurate; required for valid TLS certs, JWT validation, and log correlation."},
 	{ID: "zram", Category: "System", Name: "zram compressed swap", Description: "Compressed-RAM swap so the OOM killer doesn't fire on transient spikes. Buys headroom on small boxes."},
-	{ID: "swapfile", Category: "System", Name: "4G swap file", Description: "Disk-backed swap (4G) for memory headroom. Slower than RAM and wears SSDs over time — prefer zram on tiny boxes."},
+	{ID: "swapfile", Category: "System", Name: "4G swap file", Description: "Disk-backed swap (4G) for memory headroom. Slower than RAM and wears SSDs over time; prefer zram on tiny boxes."},
 	{ID: "ulimits", Category: "System", Name: "Raise file-descriptor limits", Description: "Raise nofile to 65535 for services that accept many connections, to avoid 'too many open files'."},
 
-	{ID: "aide", Category: "Audit", Name: "AIDE file integrity", Description: "Hash critical system files and alert on changes — catches tampering. Package updates trigger alerts you must re-baseline."},
-	{ID: "auditd", Category: "Audit", Name: "auditd", Description: "Kernel-level syscall audit trail with user/process context. Gold standard for forensics — logs are noisy."},
+	{ID: "aide", Category: "Audit", Name: "AIDE file integrity", Description: "Hash critical system files and alert on changes to catch tampering. Package updates trigger alerts you must re-baseline."},
+	{ID: "auditd", Category: "Audit", Name: "auditd", Description: "Kernel-level syscall audit trail with user/process context. Gold standard for forensics; logs are noisy."},
 	{ID: "rkhunter", Category: "Audit", Name: "rkhunter", Description: "Installs the rootkit scanner for on-demand checks. Cheap insurance; signature-based, so it misses novel rootkits."},
 
-	{ID: "harden-ssh", Category: "SSH", Name: "Harden SSH (key-only)", Description: "Disable root login and password authentication — SSH becomes key-only. Strong, BUT you can be locked out if your key isn't installed, and your root password stops working over SSH (only the provider console remains)."},
+	{ID: "harden-ssh", Category: "SSH", Name: "Harden SSH (key-only)", Description: "Disable root login and password authentication so SSH becomes key-only. Strong, BUT you can be locked out if your key isn't installed, and your root password stops working over SSH (only the provider console remains)."},
 }
 
 // canonicalOptions returns the requested option ids that exist in the catalog,
@@ -349,7 +349,7 @@ func (s *ServerService) Get(id string) (Server, error) {
 // written to out as they happen.
 func (s *ServerService) Setup(ctx context.Context, id string, options []string, out io.Writer) error {
 	// Guard against concurrent/duplicate bootstraps for the same server (e.g. a
-	// reconnecting client) so we never run multiple SSH setups at once — which
+	// reconnecting client) so we never run multiple SSH setups at once, which
 	// could corrupt state or trip the server's fail2ban.
 	s.mu.Lock()
 	if s.settingUp[id] {
@@ -386,7 +386,7 @@ func (s *ServerService) Setup(ctx context.Context, id string, options []string, 
 
 	// Resolve the operator's own public key so they get direct SSH access:
 	// prefer one they pasted, else auto-detect a local ~/.ssh key. If neither
-	// exists, only mountabo will have access — say so in the live log.
+	// exists, only mountabo will have access, say so in the live log.
 	userKey := strings.TrimSpace(server.UserPublicKey)
 	if userKey == "" {
 		if detected, derr := s.localKeys.LocalPublicKey(); derr == nil {
@@ -394,7 +394,7 @@ func (s *ServerService) Setup(ctx context.Context, id string, options []string, 
 		}
 	}
 	if userKey == "" {
-		_, _ = io.WriteString(out, "==> note: no personal SSH key found (~/.ssh) or pasted — only mountabo will have key access to this server\n")
+		_, _ = io.WriteString(out, "==> note: no personal SSH key found (~/.ssh) or pasted, only mountabo will have key access to this server\n")
 	}
 
 	// Pin the host key captured when the server was added: if it doesn't match,
