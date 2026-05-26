@@ -66,7 +66,7 @@ func deployInput() DeployInput {
 		Repo:      "shop",
 		Branch:    "main",
 		DeployDir: "/opt/shop",
-		Ports:     DeployPorts{Frontend: "3000", Backend: "8080"},
+		Ports:     []DeployPort{{EnvVar: "FRONTEND_PORT", Value: "3000", Container: "3000"}},
 		EnvVars:   []DeployEnvVar{{Key: "DATABASE_URL", Value: "postgres://secret"}},
 	}
 }
@@ -169,5 +169,45 @@ func TestDeploy_NotConnected(t *testing.T) {
 	err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder))
 	if err == nil {
 		t.Fatal("expected ErrNotConnected to propagate")
+	}
+}
+
+func TestPreview_GeneratesArtifactsWithoutSideEffects(t *testing.T) {
+	_, _, repo, envs, secrets, svc := readyDeployFixture(t)
+
+	art, err := svc.Preview(deployInput())
+	if err != nil {
+		t.Fatalf("Preview: %v", err)
+	}
+	if art.WorkflowPath != ".github/workflows/mountabo-deploy-main.yml" {
+		t.Errorf("workflow path = %q", art.WorkflowPath)
+	}
+	if !strings.Contains(art.DeployScript, "docker compose build") {
+		t.Error("expected a compose deploy script by default")
+	}
+	if !strings.Contains(art.Workflow, "environment: main") {
+		t.Error("expected the workflow to pin the environment")
+	}
+	names := map[string]bool{}
+	for _, s := range art.Secrets {
+		names[s.Name] = true
+	}
+	for _, n := range []string{"SERVER_HOST", "SERVER_SSH_KEY", "DEPLOY_DIR", "DATABASE_URL"} {
+		if !names[n] {
+			t.Errorf("preview secrets missing %s", n)
+		}
+	}
+	// Preview is pure: nothing is committed, no environment or secrets are set.
+	if len(repo.calls) != 0 || envs.env != "" || len(secrets.secrets) != 0 {
+		t.Error("Preview must have no side effects")
+	}
+}
+
+func TestPreview_RejectsInvalidEnvVarName(t *testing.T) {
+	_, _, _, _, _, svc := readyDeployFixture(t)
+	in := deployInput()
+	in.EnvVars = []DeployEnvVar{{Key: "bad name", Value: "x"}}
+	if _, err := svc.Preview(in); err == nil {
+		t.Fatal("expected an error for an invalid env var name")
 	}
 }

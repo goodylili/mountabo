@@ -15,12 +15,12 @@ import (
 // their values can be stored as secrets.
 var secretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// DeployPorts are the published container ports for the deployment.
-type DeployPorts struct {
-	Frontend string
-	Backend  string
-	Postgres string
-	Redis    string
+// DeployPort is one published port the operator configured. EnvVar/Value back a
+// compose stack's host port; Value/Container back a `docker run -p` mapping.
+type DeployPort struct {
+	EnvVar    string
+	Value     string
+	Container string
 }
 
 // DeployEnvVar is one application environment variable; its value is stored as a
@@ -31,8 +31,9 @@ type DeployEnvVar struct {
 }
 
 // DeployInput is what the operator supplies to wire continuous deployment of a
-// repo branch to one of their servers. Environment names the GitHub deployment
-// environment whose secrets the workflow uses; it defaults to Branch.
+// repo branch to one of their servers. Strategy is "compose" or "docker"
+// (defaulting to compose); Environment names the GitHub deployment environment
+// whose secrets the workflow uses, defaulting to Branch.
 type DeployInput struct {
 	ServerID    string
 	App         string
@@ -40,9 +41,10 @@ type DeployInput struct {
 	Repo        string
 	Branch      string
 	Environment string
+	Strategy    string
 	RootDir     string
 	DeployDir   string
-	Ports       DeployPorts
+	Ports       []DeployPort
 	EnvVars     []DeployEnvVar
 }
 
@@ -51,6 +53,26 @@ type DeployInput struct {
 type NamedSecret struct {
 	Name  string
 	Value string
+}
+
+// SecretMeta describes a secret the deploy needs, without its value: Managed is
+// true for the server-connection secrets mountabo fills in, false for the
+// operator's own env vars. Used by the preview so the UI can show what will be
+// set and by whom.
+type SecretMeta struct {
+	Name    string `json:"name"`
+	Managed bool   `json:"managed"`
+}
+
+// DeployArtifacts is exactly what mountabo will commit and configure: the
+// workflow file (and its path), deploy.sh, and the secrets it needs. Generated
+// purely from a DeployInput so the UI can preview byte-for-byte what a deploy
+// would do.
+type DeployArtifacts struct {
+	WorkflowPath string       `json:"workflowPath"`
+	Workflow     string       `json:"workflow"`
+	DeployScript string       `json:"deployScript"`
+	Secrets      []SecretMeta `json:"secrets"`
 }
 
 // ── ports (consumed here, implemented by the github adapter) ──
@@ -75,7 +97,8 @@ type EnvSecretSetter interface {
 // DeployService configures continuous deployment of a repo to a server: it
 // commits the workflow and deploy.sh, creates the deployment environment, and
 // stores the secrets the workflow needs (server connection details, managed by
-// mountabo, plus the operator's own env vars).
+// mountabo, plus the operator's own env vars). It is also the single source of
+// truth for the generated files, so the UI previews via Preview.
 type DeployService struct {
 	servers ServerStore
 	vault   SecretVault
@@ -90,6 +113,22 @@ func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore,
 	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets}
 }
 
+// Preview generates the deploy artifacts from the config alone, no server, no
+// token, no side effects, so the configure UI can show exactly what a deploy
+// would commit and set.
+func (s *DeployService) Preview(in DeployInput) (DeployArtifacts, error) {
+	if err := validateDeploy(in); err != nil {
+		return DeployArtifacts{}, err
+	}
+	cfg := buildConfig(in)
+	return DeployArtifacts{
+		WorkflowPath: workflow.Path(cfg),
+		Workflow:     workflow.Workflow(cfg),
+		DeployScript: workflow.DeployScript(cfg),
+		Secrets:      secretMetas(in),
+	}, nil
+}
+
 // Deploy writes the deploy artifacts to the repo, provisions the environment,
 // and sets its secrets, streaming each step to out so the operator follows
 // along live. The deployment itself runs later on GitHub's runner (triggered by
@@ -98,21 +137,11 @@ func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore,
 // mountabo's stored private key for the box; it is set as a secret but never
 // written to out.
 func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Writer) error {
-	in.App = strings.TrimSpace(in.App)
-	in.Owner = strings.TrimSpace(in.Owner)
-	in.Repo = strings.TrimSpace(in.Repo)
-	in.Branch = strings.TrimSpace(in.Branch)
-	in.DeployDir = strings.TrimSpace(in.DeployDir)
-	if in.ServerID == "" || in.App == "" || in.Owner == "" || in.Repo == "" || in.Branch == "" {
-		return fmt.Errorf("server, app, owner, repo and branch are required")
+	if in.ServerID == "" {
+		return fmt.Errorf("server is required")
 	}
-	if in.DeployDir == "" {
-		return fmt.Errorf("deploy directory is required")
-	}
-	for _, v := range in.EnvVars {
-		if k := strings.TrimSpace(v.Key); k != "" && !secretName.MatchString(k) {
-			return fmt.Errorf("invalid environment variable name %q", k)
-		}
+	if err := validateDeploy(in); err != nil {
+		return err
 	}
 
 	server, err := s.servers.Get(in.ServerID)
@@ -136,20 +165,10 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("load server key: %w", err)
 	}
 
-	env := strings.TrimSpace(in.Environment)
+	cfg := buildConfig(in)
+	env := cfg.Environment
 	if env == "" {
-		env = in.Branch
-	}
-	cfg := workflow.Config{
-		App:         in.App,
-		Owner:       in.Owner,
-		Repo:        in.Repo,
-		Branch:      in.Branch,
-		Environment: env,
-		RootDir:     in.RootDir,
-		DeployDir:   in.DeployDir,
-		Ports:       workflow.Ports(in.Ports),
-		EnvVars:     toWorkflowEnv(in.EnvVars),
+		env = cfg.Branch
 	}
 
 	progress(out, "writing %s", workflow.DeployScriptPath)
@@ -174,19 +193,64 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("set environment secrets: %w", err)
 	}
 
-	progress(out, "deploy configured, push to %s to trigger a deploy", in.Branch)
+	progress(out, "deploy configured, push to %s to trigger a %s deploy", in.Branch, cfg.Strategy)
 	return nil
 }
 
-// deploySecrets is the full secret set: server connection details mountabo
-// manages, the deploy directory, then the operator's env vars (blank keys
-// dropped), in a stable order.
+// validateDeploy checks the config fields common to preview and deploy.
+func validateDeploy(in DeployInput) error {
+	if strings.TrimSpace(in.App) == "" || strings.TrimSpace(in.Owner) == "" ||
+		strings.TrimSpace(in.Repo) == "" || strings.TrimSpace(in.Branch) == "" {
+		return fmt.Errorf("app, owner, repo and branch are required")
+	}
+	if strings.TrimSpace(in.DeployDir) == "" {
+		return fmt.Errorf("deploy directory is required")
+	}
+	for _, v := range in.EnvVars {
+		if k := strings.TrimSpace(v.Key); k != "" && !secretName.MatchString(k) {
+			return fmt.Errorf("invalid environment variable name %q", k)
+		}
+	}
+	return nil
+}
+
+// buildConfig maps a validated DeployInput onto the generator's config.
+func buildConfig(in DeployInput) workflow.Config {
+	strategy := workflow.Compose
+	if in.Strategy == string(workflow.Docker) {
+		strategy = workflow.Docker
+	}
+	ports := make([]workflow.Port, 0, len(in.Ports))
+	for _, p := range in.Ports {
+		ports = append(ports, workflow.Port{EnvVar: p.EnvVar, Value: p.Value, Container: p.Container})
+	}
+	envs := make([]workflow.EnvVar, 0, len(in.EnvVars))
+	for _, v := range in.EnvVars {
+		envs = append(envs, workflow.EnvVar{Key: v.Key, Value: v.Value})
+	}
+	return workflow.Config{
+		App:         strings.TrimSpace(in.App),
+		Owner:       strings.TrimSpace(in.Owner),
+		Repo:        strings.TrimSpace(in.Repo),
+		Branch:      strings.TrimSpace(in.Branch),
+		Environment: strings.TrimSpace(in.Environment),
+		RootDir:     in.RootDir,
+		DeployDir:   strings.TrimSpace(in.DeployDir),
+		Strategy:    strategy,
+		Ports:       ports,
+		EnvVars:     envs,
+	}
+}
+
+// deploySecrets is the full secret set with values: server connection details
+// mountabo manages, the deploy directory, then the operator's env vars (blank
+// keys dropped), in a stable order.
 func deploySecrets(server Server, sshKey string, in DeployInput) []NamedSecret {
 	secrets := []NamedSecret{
 		{Name: "SERVER_HOST", Value: server.IP},
 		{Name: "SERVER_USER", Value: BootstrapUser},
 		{Name: "SERVER_SSH_KEY", Value: sshKey},
-		{Name: "DEPLOY_DIR", Value: in.DeployDir},
+		{Name: "DEPLOY_DIR", Value: strings.TrimSpace(in.DeployDir)},
 	}
 	for _, v := range in.EnvVars {
 		if k := strings.TrimSpace(v.Key); k != "" {
@@ -196,12 +260,22 @@ func deploySecrets(server Server, sshKey string, in DeployInput) []NamedSecret {
 	return secrets
 }
 
-func toWorkflowEnv(vars []DeployEnvVar) []workflow.EnvVar {
-	out := make([]workflow.EnvVar, 0, len(vars))
-	for _, v := range vars {
-		out = append(out, workflow.EnvVar{Key: v.Key, Value: v.Value})
+// secretMetas is the same secret set as deploySecrets but names-only, for the
+// preview: SERVER_* + DEPLOY_DIR are mountabo-managed, env vars are the
+// operator's.
+func secretMetas(in DeployInput) []SecretMeta {
+	metas := []SecretMeta{
+		{Name: "SERVER_HOST", Managed: true},
+		{Name: "SERVER_USER", Managed: true},
+		{Name: "SERVER_SSH_KEY", Managed: true},
+		{Name: "DEPLOY_DIR", Managed: true},
 	}
-	return out
+	for _, v := range in.EnvVars {
+		if k := strings.TrimSpace(v.Key); k != "" {
+			metas = append(metas, SecretMeta{Name: k, Managed: false})
+		}
+	}
+	return metas
 }
 
 // progress writes one "==> ..." line to the live output stream, the same
