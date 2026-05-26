@@ -151,6 +151,15 @@ export function ServerOptions({
             : `confirm & apply ${changed} change${changed === 1 ? "" : "s"}`}
       </button>
 
+      {(server.options?.length ?? 0) > 0 && (
+        <button
+          onClick={() => onApply([], {})}
+          className="mt-2 w-full rounded-lg border border-line px-4 py-2 text-[12px] text-muted transition-colors hover:border-red-400/50 hover:text-red-300"
+        >
+          revert all hardening ({server.options?.length} applied)
+        </button>
+      )}
+
       <ChangeHistory server={server} nameOf={nameOf} onUndo={undoEvent} />
     </div>
   );
