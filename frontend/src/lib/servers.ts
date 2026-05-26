@@ -27,10 +27,11 @@ export type ServerView = {
   options: string[] | null;
 };
 
-// An opt-in hardening step the operator can choose at setup time.
+// An opt-in hardening step the operator can choose. Category groups them in the UI.
 export type SetupOption = {
   id: string;
   name: string;
+  category: string;
   description: string;
 };
 

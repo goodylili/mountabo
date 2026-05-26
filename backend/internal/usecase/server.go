@@ -98,36 +98,43 @@ type BootstrapParams struct {
 
 // SetupOption is an opt-in hardening step the operator can choose to apply. The
 // Description explains what it does and its trade-off so the choice is informed.
+// Category groups related options in the UI.
 type SetupOption struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
+	Category    string `json:"category"`
 	Description string `json:"description"`
 }
 
-// SetupOptions is the catalog of optional steps. Order is the order they are
-// applied (harden-ssh last, after keys + firewall are in place). None are
-// applied unless the operator explicitly selects them.
+// SetupOptions is the catalog of optional steps, every one a parameterless
+// on/off toggle with matching enable/disable scripts. Array order is the apply
+// order (harden-ssh last, since it can disable root/password login); the UI
+// groups by Category. None are applied unless the operator selects them.
 var SetupOptions = []SetupOption{
-	{
-		ID:          "firewall",
-		Name:        "UFW firewall",
-		Description: "Block all inbound traffic except SSH (22), HTTP (80) and HTTPS (443). Reduces exposure — but note Docker can publish container ports past UFW unless you bind them to localhost.",
-	},
-	{
-		ID:          "fail2ban",
-		Name:        "fail2ban",
-		Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force attempts. Can briefly lock you out if you mistype your own login several times.",
-	},
-	{
-		ID:          "auto-updates",
-		Name:        "Automatic security updates",
-		Description: "Install unattended-upgrades so security patches apply on their own. Keeps the box patched without you; may occasionally trigger a reboot.",
-	},
-	{
-		ID:          "harden-ssh",
-		Name:        "Harden SSH (key-only)",
-		Description: "Disable root login and password authentication — SSH becomes key-only. Strong protection, BUT you can be locked out if your key isn't installed, and your root password will no longer work over SSH (only via the provider console).",
-	},
+	{ID: "firewall", Category: "Network", Name: "UFW firewall", Description: "Block inbound traffic except SSH, HTTP and HTTPS. Reduces exposure — but Docker can publish container ports past UFW unless you bind them to localhost."},
+
+	{ID: "ssh-limits", Category: "SSH", Name: "Limit SSH auth attempts", Description: "Set MaxAuthTries 3 and LoginGraceTime 30. Cheaper than fail2ban — but multi-key ssh-agents can hit the limit on legitimate logins."},
+	{ID: "ssh-allowusers", Category: "SSH", Name: "Restrict SSH to mountabo + root", Description: "Whitelist who may SSH in (AllowUsers mountabo root). Blocks everyone else silently — handy, until you forget you added it."},
+	{ID: "fail2ban", Category: "SSH", Name: "fail2ban", Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force. Can briefly lock you out if you mistype your own login several times."},
+	{ID: "crowdsec", Category: "SSH", Name: "CrowdSec", Description: "Modern fail2ban with community-shared blocklists — blocks IPs flagged across the network. Better signal, heavier; the shared list occasionally bans something unexpected."},
+
+	{ID: "netdata", Category: "Monitoring", Name: "Netdata (local)", Description: "Real-time CPU/RAM/disk/network/Docker dashboard, bound to 127.0.0.1:19999. Reach it via an SSH tunnel or a reverse proxy with auth."},
+	{ID: "uptime-kuma", Category: "Monitoring", Name: "Uptime Kuma", Description: "Self-hosted uptime monitor with notifications, on 127.0.0.1:3001. Runs on the box it monitors, so host critical alerts elsewhere too."},
+	{ID: "ntfy", Category: "Monitoring", Name: "ntfy", Description: "Self-hosted push notifications on 127.0.0.1:8080 — pipe alerts in via curl. Dead simple; self-host avoids the public server's rate limits."},
+	{ID: "journald-persistent", Category: "Monitoring", Name: "Persistent journald logs", Description: "Keep system logs across reboots (capped at 2G) so postmortems are possible."},
+
+	{ID: "auto-updates", Category: "System", Name: "Automatic security updates", Description: "Install unattended-upgrades so security patches apply on their own. Keeps the box patched; may occasionally trigger a reboot."},
+	{ID: "sysctl", Category: "System", Name: "sysctl hardening", Description: "Kernel knobs: SYN cookies, restricted dmesg, reverse-path filtering, no ICMP redirects. Free defense-in-depth."},
+	{ID: "chrony", Category: "System", Name: "Accurate time (chrony)", Description: "Keep the clock accurate — required for valid TLS certs, JWT validation, and log correlation."},
+	{ID: "zram", Category: "System", Name: "zram compressed swap", Description: "Compressed-RAM swap so the OOM killer doesn't fire on transient spikes. Buys headroom on small boxes."},
+	{ID: "swapfile", Category: "System", Name: "4G swap file", Description: "Disk-backed swap (4G) for memory headroom. Slower than RAM and wears SSDs over time — prefer zram on tiny boxes."},
+	{ID: "ulimits", Category: "System", Name: "Raise file-descriptor limits", Description: "Raise nofile to 65535 for services that accept many connections, to avoid 'too many open files'."},
+
+	{ID: "aide", Category: "Audit", Name: "AIDE file integrity", Description: "Hash critical system files and alert on changes — catches tampering. Package updates trigger alerts you must re-baseline."},
+	{ID: "auditd", Category: "Audit", Name: "auditd", Description: "Kernel-level syscall audit trail with user/process context. Gold standard for forensics — logs are noisy."},
+	{ID: "rkhunter", Category: "Audit", Name: "rkhunter", Description: "Installs the rootkit scanner for on-demand checks. Cheap insurance; signature-based, so it misses novel rootkits."},
+
+	{ID: "harden-ssh", Category: "SSH", Name: "Harden SSH (key-only)", Description: "Disable root login and password authentication — SSH becomes key-only. Strong, BUT you can be locked out if your key isn't installed, and your root password stops working over SSH (only the provider console remains)."},
 }
 
 // canonicalOptions returns the requested option ids that exist in the catalog,
