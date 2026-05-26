@@ -210,34 +210,53 @@ export function NewDeployment({
               const full = `${s.owner}/${s.name}`;
               const active = source === full;
               return (
-                <li key={full}>
+                <li
+                  key={full}
+                  className={`flex items-center gap-3 px-5 transition-colors ${
+                    active ? "bg-lime/[0.08]" : "hover:bg-surface-hover"
+                  }`}
+                >
+                  <div className="min-w-0 flex-1 py-3.5">
+                    <a
+                      href={`https://github.com/${full}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`open ${full} on GitHub`}
+                      className="inline-flex items-center gap-2 text-[15px] font-medium text-cream transition-colors hover:text-lime hover:underline"
+                    >
+                      {s.name}
+                      {s.private && <Lock className="text-muted" />}
+                    </a>
+                    <span className="mt-1 flex items-center gap-2 text-[12px] text-muted">
+                      <Branch className={s.branchAccent ? "text-lime" : "text-muted"} />
+                      <span className={s.branchAccent ? "text-lime" : ""}>{s.branch}</span>
+                      <span className="text-faint">·</span>
+                      {s.updated}
+                      <span className="text-faint">·</span>
+                      {s.language}
+                      {s.loc && (
+                        <>
+                          <span className="text-faint">·</span>
+                          {s.loc}
+                        </>
+                      )}
+                    </span>
+                  </div>
                   <button
                     onClick={() => setSource(full)}
-                    className={`flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors ${
-                      active ? "bg-lime/[0.08]" : "hover:bg-surface-hover"
+                    className={`flex shrink-0 items-center gap-1.5 rounded-md border px-3 py-1.5 text-[12px] transition-colors ${
+                      active
+                        ? "border-lime/60 bg-lime/[0.08] text-lime"
+                        : "border-line text-muted hover:border-lime/50 hover:text-lime"
                     }`}
                   >
-                    <div className="flex-1">
-                      <span className="flex items-center gap-2 text-[15px] font-medium text-cream">
-                        {s.name}
-                        {s.private && <Lock className="text-muted" />}
-                      </span>
-                      <span className="mt-1 flex items-center gap-2 text-[12px] text-muted">
-                        <Branch className={s.branchAccent ? "text-lime" : "text-muted"} />
-                        <span className={s.branchAccent ? "text-lime" : ""}>{s.branch}</span>
-                        <span className="text-faint">·</span>
-                        {s.updated}
-                        <span className="text-faint">·</span>
-                        {s.language}
-                        {s.loc && (
-                          <>
-                            <span className="text-faint">·</span>
-                            {s.loc}
-                          </>
-                        )}
-                      </span>
-                    </div>
-                    {active && <ArrowRight className="text-lime" />}
+                    {active ? (
+                      <>
+                        selected <ArrowRight className="text-lime" />
+                      </>
+                    ) : (
+                      "select"
+                    )}
                   </button>
                 </li>
               );
