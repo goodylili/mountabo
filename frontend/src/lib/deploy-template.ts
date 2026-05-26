@@ -9,6 +9,42 @@
 
 export type EnvVar = { key: string; value: string };
 
+// parseEnvFile turns the contents of a .env file (or pasted blob) into rows.
+// It accepts `KEY=value`, `export KEY=value`, blank lines, and `#` comments,
+// and strips one layer of surrounding single/double quotes from values. It does
+// not strip inline comments — secret values legitimately contain `#`.
+export function parseEnvFile(text: string): EnvVar[] {
+  const out: EnvVar[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const body = line.startsWith("export ") ? line.slice(7).trim() : line;
+    const eq = body.indexOf("=");
+    if (eq <= 0) continue; // no key, or no `=`
+    const key = body.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue; // not a valid env name
+    let value = body.slice(eq + 1).trim();
+    if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+      value = value.slice(1, -1);
+    }
+    out.push({ key, value });
+  }
+  return out;
+}
+
+// mergeEnv overlays imported vars onto existing rows: empty rows are dropped,
+// a matching key is updated in place, new keys are appended. Always returns at
+// least one row so the form keeps an editable line.
+export function mergeEnv(existing: EnvVar[], incoming: EnvVar[]): EnvVar[] {
+  const out = existing.filter((r) => r.key.trim());
+  for (const v of incoming) {
+    const i = out.findIndex((r) => r.key === v.key);
+    if (i >= 0) out[i] = v;
+    else out.push(v);
+  }
+  return out.length ? out : [{ key: "", value: "" }];
+}
+
 export type DeployConfig = {
   app: string;
   owner: string;

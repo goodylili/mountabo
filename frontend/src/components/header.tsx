@@ -37,9 +37,9 @@ export function Header({
         className={`mx-auto flex h-14 w-full items-center gap-5 px-6 text-[13px] ${container}`}
       >
       <Link href="/" className="flex items-center gap-2 text-cream">
-        <LogoMark className="text-lime" />
-        <span className="font-bold tracking-tight">mountabo</span>
-        <span className="text-faint">v0.4.2</span>
+        <LogoMark className="text-lime" width={30} height={30} />
+        <span className="text-lg font-bold tracking-tight">mountabo</span>
+        <span className="text-[13px] text-faint">v0.4.2</span>
       </Link>
 
       <span className="text-faint">|</span>

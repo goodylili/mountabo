@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
@@ -11,6 +11,8 @@ import {
   deploySecrets,
   generateDeployScript,
   generateWorkflow,
+  mergeEnv,
+  parseEnvFile,
   workflowPath,
 } from "@/lib/deploy-template";
 
@@ -40,6 +42,16 @@ export function ConfigureView({
   const [ports, setPorts] = useState({ frontend: "3000", backend: "5001", postgres: "5432", redis: "6379" });
   const [envVars, setEnvVars] = useState<EnvVar[]>([{ key: "", value: "" }]);
   const [tab, setTab] = useState<Tab>("workflow");
+  const [showPaste, setShowPaste] = useState(false);
+  const [paste, setPaste] = useState("");
+  const [imported, setImported] = useState<number | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function importEnv(text: string) {
+    const parsed = parseEnvFile(text);
+    setEnvVars((rows) => mergeEnv(rows, parsed));
+    setImported(parsed.length);
+  }
 
   const cfg: DeployConfig = useMemo(
     () => ({
@@ -115,6 +127,64 @@ export function ConfigureView({
         </Section>
 
         <Section label="environment variables" hint="become encrypted repo secrets">
+          {/* Import a whole .env at once — paste it or pick a file. Parsing is
+              local; values never leave the browser here. */}
+          <div className="mb-3 flex items-center gap-2">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="rounded-md border border-line px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+            >
+              import .env file
+            </button>
+            <button
+              onClick={() => setShowPaste((v) => !v)}
+              className="rounded-md border border-line px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+            >
+              paste .env
+            </button>
+            {imported !== null && (
+              <span className="text-[12px] text-lime">imported {imported}</span>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".env,.txt,text/plain"
+              className="hidden"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                if (f) importEnv(await f.text());
+                e.target.value = ""; // allow re-importing the same file
+              }}
+            />
+          </div>
+
+          {showPaste && (
+            <div className="mb-3">
+              <textarea
+                value={paste}
+                onChange={(e) => setPaste(e.target.value)}
+                rows={5}
+                spellCheck={false}
+                placeholder={"DATABASE_URL=postgres://...\nAPI_KEY=sk-..."}
+                className={`${inputCls} resize-y font-mono`}
+              />
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    importEnv(paste);
+                    setPaste("");
+                    setShowPaste(false);
+                  }}
+                  disabled={!paste.trim()}
+                  className="rounded-md border border-lime/40 px-3 py-1.5 text-[12px] text-lime transition-colors hover:bg-lime/10 disabled:opacity-40"
+                >
+                  parse &amp; add
+                </button>
+                <span className="text-[11px] text-muted">KEY=value per line · # comments and quotes handled</span>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             {envVars.map((row, i) => (
               <div key={i} className="flex items-center gap-2">

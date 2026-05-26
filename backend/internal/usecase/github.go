@@ -8,8 +8,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
+
+// repoCacheTTL bounds how stale the cached repository list may be. Listing all
+// of an account's repos is the slowest call in the app (full pagination against
+// GitHub), so a short cache keeps repeat page loads instant while still picking
+// up new repos within a minute.
+const repoCacheTTL = 60 * time.Second
 
 // ErrNotConnected is returned when no GitHub token is stored yet.
 var ErrNotConnected = errors.New("github not connected")
@@ -72,6 +79,10 @@ type GitHubConnector struct {
 	accounts  AccountFetcher
 	repos     RepoLister
 	tokens    TokenStore
+
+	mu          sync.Mutex // guards the repo cache below
+	repoCache   []Repo
+	repoCacheAt time.Time
 }
 
 // NewGitHubConnector wires the connector to its ports.
@@ -97,7 +108,16 @@ func (c *GitHubConnector) Connect(ctx context.Context, code, redirectURI string)
 	if err := c.tokens.Save(token); err != nil {
 		return Account{}, fmt.Errorf("store token: %w", err)
 	}
+	c.invalidateRepoCache() // a fresh connection may be a different account
 	return account, nil
+}
+
+// invalidateRepoCache drops any cached repository list so the next read fetches
+// fresh. Called whenever the connected identity changes.
+func (c *GitHubConnector) invalidateRepoCache() {
+	c.mu.Lock()
+	c.repoCache, c.repoCacheAt = nil, time.Time{}
+	c.mu.Unlock()
 }
 
 // Status reports the connected account using the stored token, refreshing the
@@ -119,6 +139,14 @@ func (c *GitHubConnector) Status(ctx context.Context) (Account, error) {
 // Repositories lists the connected account's repositories (public and private)
 // using the stored token. It returns ErrNotConnected when no token is stored.
 func (c *GitHubConnector) Repositories(ctx context.Context) ([]Repo, error) {
+	c.mu.Lock()
+	if c.repoCache != nil && time.Since(c.repoCacheAt) < repoCacheTTL {
+		cached := c.repoCache
+		c.mu.Unlock()
+		return cached, nil
+	}
+	c.mu.Unlock()
+
 	token, err := c.tokens.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load token: %w", err)
@@ -128,6 +156,10 @@ func (c *GitHubConnector) Repositories(ctx context.Context) ([]Repo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list repositories: %w", err)
 	}
+
+	c.mu.Lock()
+	c.repoCache, c.repoCacheAt = repos, time.Now()
+	c.mu.Unlock()
 	return repos, nil
 }
 
@@ -137,5 +169,6 @@ func (c *GitHubConnector) Disconnect() error {
 	if err := c.tokens.Delete(); err != nil {
 		return fmt.Errorf("delete token: %w", err)
 	}
+	c.invalidateRepoCache()
 	return nil
 }
