@@ -34,22 +34,22 @@ export function Header({
   return (
     <header className="shrink-0 border-b border-line">
       <div
-        className={`mx-auto flex h-14 w-full items-center gap-5 px-6 text-[13px] ${container}`}
+        className={`mx-auto flex h-14 w-full items-center gap-3 px-4 text-[13px] sm:gap-5 sm:px-6 ${container}`}
       >
-      <Link href="/" className="flex items-center gap-2 text-cream">
+      <Link href="/" className="flex shrink-0 items-center gap-2 text-cream">
         <LogoMark className="text-lime" width={30} height={30} />
         <span className="text-lg font-bold tracking-tight">mountabo</span>
-        <span className="text-[13px] text-faint">v0.4.2</span>
+        <span className="hidden text-[13px] text-faint sm:inline">v0.4.2</span>
       </Link>
 
-      <span className="text-faint">|</span>
+      <span className="hidden text-faint sm:inline">|</span>
 
-      <span className="flex items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-1 text-muted">
+      <span className="hidden items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-1 text-muted md:flex">
         <span className="h-1.5 w-1.5 rounded-full bg-blue" />
         localhost:7777
       </span>
 
-      <nav className="flex items-center gap-2 text-muted">
+      <nav className="hidden items-center gap-2 text-muted sm:flex">
         {crumbs.map((c, i) => (
           <span key={c.label} className="flex items-center gap-2">
             {i > 0 && <span className="text-faint">›</span>}
@@ -64,7 +64,7 @@ export function Header({
         ))}
       </nav>
 
-      <div className="ml-auto flex items-center gap-4 text-muted">
+      <div className="ml-auto flex min-w-0 items-center gap-3 text-muted sm:gap-4">
         {back ? (
           <>
             <Link
@@ -95,10 +95,10 @@ export function Header({
                 monitor
               </Link>
             </nav>
-            <span className="h-4 w-px bg-line" />
-            <span className="flex items-center gap-2 text-cream">
+            <span className="hidden h-4 w-px bg-line sm:block" />
+            <span className="flex min-w-0 items-center gap-2 text-cream">
               <GithubMark />
-              {account}
+              <span className="truncate">{account}</span>
             </span>
             <button className="transition-colors hover:text-cream" aria-label="docs">
               <Book />

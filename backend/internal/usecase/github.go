@@ -49,6 +49,32 @@ type Repo struct {
 	HasDocker bool
 }
 
+// RepoRef points at a place inside a repository to read container config from:
+// owner/name at an optional ref (branch or sha; empty means the default branch)
+// and an optional sub-directory (empty means the repo root) where the compose
+// file or Dockerfile lives.
+type RepoRef struct {
+	Owner string
+	Name  string
+	Ref   string
+	Dir   string
+}
+
+// ServicePort is one published port mountabo detected in a repo's container
+// configuration. When EnvVar is set, the compose file binds the host port to
+// that environment variable (e.g. "${FRONTEND_PORT:-3000}:3000"), so mountabo
+// can choose the value and inject it at deploy time; Editable is true and Host
+// carries the default. When EnvVar is empty the host port is a literal in the
+// file (or a Dockerfile EXPOSE line) that mountabo cannot remap, so it is shown
+// read-only.
+type ServicePort struct {
+	Service   string // compose service name; empty for a Dockerfile EXPOSE port
+	EnvVar    string // host-port env var, empty when the host port is a literal
+	Host      string // host port value or env-var default; empty if auto-assigned
+	Container string // container port
+	Editable  bool   // true when mountabo can set the host port via EnvVar
+}
+
 // CodeExchanger turns a completed OAuth web-flow authorization code into a
 // token. redirectURI must match the one used to obtain the code.
 type CodeExchanger interface {
@@ -66,6 +92,13 @@ type RepoLister interface {
 	List(ctx context.Context, t Token) ([]Repo, error)
 }
 
+// PortDetector reads a repo's container configuration (a compose file, else a
+// Dockerfile) at the given ref and reports the published ports it declares. A
+// repo with no detectable ports returns an empty slice, not an error.
+type PortDetector interface {
+	DetectPorts(ctx context.Context, t Token, ref RepoRef) ([]ServicePort, error)
+}
+
 // TokenStore persists the connection token in the OS keychain. Load returns
 // ErrNotConnected when nothing is stored; Delete is idempotent.
 type TokenStore interface {
@@ -81,6 +114,7 @@ type GitHubConnector struct {
 	exchanger CodeExchanger
 	accounts  AccountFetcher
 	repos     RepoLister
+	ports     PortDetector
 	tokens    TokenStore
 
 	mu          sync.Mutex // guards the repo cache below
@@ -89,8 +123,8 @@ type GitHubConnector struct {
 }
 
 // NewGitHubConnector wires the connector to its ports.
-func NewGitHubConnector(exchanger CodeExchanger, accounts AccountFetcher, repos RepoLister, tokens TokenStore) *GitHubConnector {
-	return &GitHubConnector{exchanger: exchanger, accounts: accounts, repos: repos, tokens: tokens}
+func NewGitHubConnector(exchanger CodeExchanger, accounts AccountFetcher, repos RepoLister, ports PortDetector, tokens TokenStore) *GitHubConnector {
+	return &GitHubConnector{exchanger: exchanger, accounts: accounts, repos: repos, ports: ports, tokens: tokens}
 }
 
 // Connect exchanges code for a token, verifies it by reading the account it
@@ -164,6 +198,23 @@ func (c *GitHubConnector) Repositories(ctx context.Context) ([]Repo, error) {
 	c.repoCache, c.repoCacheAt = repos, time.Now()
 	c.mu.Unlock()
 	return repos, nil
+}
+
+// DetectPorts reads the published ports declared in a repo's container config
+// using the stored token, so the UI can offer the project's real ports instead
+// of a fixed guess. It returns ErrNotConnected when no token is stored, and an
+// empty slice (no error) when the repo declares no detectable ports.
+func (c *GitHubConnector) DetectPorts(ctx context.Context, ref RepoRef) ([]ServicePort, error) {
+	token, err := c.tokens.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load token: %w", err)
+	}
+
+	ports, err := c.ports.DetectPorts(ctx, token, ref)
+	if err != nil {
+		return nil, fmt.Errorf("detect ports: %w", err)
+	}
+	return ports, nil
 }
 
 // Disconnect removes the stored token from the keychain. It is idempotent: a

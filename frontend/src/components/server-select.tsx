@@ -22,11 +22,11 @@ export function ServerSelect({
   const empty = servers.length === 0;
 
   return (
-    <div className="relative">
+    <div className="relative w-full sm:w-auto">
       <button
         onClick={() => !empty && setOpen((o) => !o)}
         disabled={empty}
-        className="flex w-full min-w-[15rem] items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-cream transition-colors hover:border-line-strong focus:border-line-strong focus:outline-none disabled:opacity-60"
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2.5 text-[13px] text-cream transition-colors hover:border-line-strong focus:border-line-strong focus:outline-none disabled:opacity-60 sm:min-w-[15rem] sm:py-2"
       >
         <span className={selected ? "text-cream" : "text-muted"}>
           {selected

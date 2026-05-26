@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// fakeExchanger, fakeFetcher, fakeRepoLister, and fakeStore are in-memory
-// stand-ins for the connector's ports, letting the flow be tested without
-// GitHub or a keychain.
+// fakeExchanger, fakeFetcher, fakeRepoLister, fakePortDetector, and fakeStore
+// are in-memory stand-ins for the connector's ports, letting the flow be tested
+// without GitHub or a keychain.
 type fakeExchanger struct {
 	token Token
 	err   error
@@ -36,6 +36,15 @@ func (f fakeRepoLister) List(context.Context, Token) ([]Repo, error) {
 	return f.repos, f.err
 }
 
+type fakePortDetector struct {
+	ports []ServicePort
+	err   error
+}
+
+func (f fakePortDetector) DetectPorts(context.Context, Token, RepoRef) ([]ServicePort, error) {
+	return f.ports, f.err
+}
+
 type fakeStore struct {
 	saved   *Token
 	deleted bool
@@ -56,6 +65,7 @@ func TestConnect_StoresTokenAndReturnsAccount(t *testing.T) {
 		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
 		fakeFetcher{account: Account{Login: "octocat"}},
 		fakeRepoLister{},
+		fakePortDetector{},
 		store,
 	)
 
@@ -77,6 +87,7 @@ func TestConnect_ExchangeFailureDoesNotStore(t *testing.T) {
 		fakeExchanger{err: errors.New("bad code")},
 		fakeFetcher{account: Account{Login: "octocat"}},
 		fakeRepoLister{},
+		fakePortDetector{},
 		store,
 	)
 
@@ -94,6 +105,7 @@ func TestConnect_AccountFailureDoesNotStore(t *testing.T) {
 		fakeExchanger{token: Token{AccessToken: "gho_abc"}},
 		fakeFetcher{err: errors.New("unauthorized")},
 		fakeRepoLister{},
+		fakePortDetector{},
 		store,
 	)
 
@@ -110,6 +122,7 @@ func TestStatus_NotConnectedPropagates(t *testing.T) {
 		fakeExchanger{},
 		fakeFetcher{},
 		fakeRepoLister{},
+		fakePortDetector{},
 		&fakeStore{loadErr: ErrNotConnected},
 	)
 
@@ -124,6 +137,7 @@ func TestRepositories_ReturnsListedRepos(t *testing.T) {
 		fakeExchanger{},
 		fakeFetcher{},
 		fakeRepoLister{repos: []Repo{{FullName: "octocat/hello"}, {FullName: "octocat/secret", Private: true}}},
+		fakePortDetector{},
 		&fakeStore{loadTok: Token{AccessToken: "gho_abc"}},
 	)
 
@@ -141,6 +155,7 @@ func TestRepositories_NotConnectedPropagates(t *testing.T) {
 		fakeExchanger{},
 		fakeFetcher{},
 		fakeRepoLister{},
+		fakePortDetector{},
 		&fakeStore{loadErr: ErrNotConnected},
 	)
 
@@ -149,9 +164,48 @@ func TestRepositories_NotConnectedPropagates(t *testing.T) {
 	}
 }
 
+func TestDetectPorts_ReturnsDetectedPorts(t *testing.T) {
+	want := []ServicePort{
+		{Service: "web", EnvVar: "FRONTEND_PORT", Host: "3000", Container: "3000", Editable: true},
+		{Service: "db", Host: "5432", Container: "5432"},
+	}
+	c := NewGitHubConnector(
+		fakeExchanger{},
+		fakeFetcher{},
+		fakeRepoLister{},
+		fakePortDetector{ports: want},
+		&fakeStore{loadTok: Token{AccessToken: "gho_abc"}},
+	)
+
+	got, err := c.DetectPorts(context.Background(), RepoRef{Owner: "octocat", Name: "hello"})
+	if err != nil {
+		t.Fatalf("DetectPorts returned error: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d ports, want %d", len(got), len(want))
+	}
+	if got[0].EnvVar != "FRONTEND_PORT" || !got[0].Editable || got[1].Editable {
+		t.Errorf("ports not passed through faithfully: %+v", got)
+	}
+}
+
+func TestDetectPorts_NotConnectedPropagates(t *testing.T) {
+	c := NewGitHubConnector(
+		fakeExchanger{},
+		fakeFetcher{},
+		fakeRepoLister{},
+		fakePortDetector{},
+		&fakeStore{loadErr: ErrNotConnected},
+	)
+
+	if _, err := c.DetectPorts(context.Background(), RepoRef{}); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("err = %v, want ErrNotConnected in chain", err)
+	}
+}
+
 func TestDisconnect_DeletesToken(t *testing.T) {
 	store := &fakeStore{}
-	c := NewGitHubConnector(fakeExchanger{}, fakeFetcher{}, fakeRepoLister{}, store)
+	c := NewGitHubConnector(fakeExchanger{}, fakeFetcher{}, fakeRepoLister{}, fakePortDetector{}, store)
 
 	if err := c.Disconnect(); err != nil {
 		t.Fatalf("Disconnect returned error: %v", err)

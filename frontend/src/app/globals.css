@@ -65,6 +65,8 @@
 
 html {
   background: var(--bg);
+  /* keep the viewport from scrolling sideways on small screens */
+  overflow-x: hidden;
 }
 
 body {
@@ -73,6 +75,16 @@ body {
   font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+/* drop the 300ms tap delay on touch targets */
+button,
+a,
+[role="button"],
+label,
+summary {
+  touch-action: manipulation;
 }
 
 ::selection {

@@ -29,13 +29,13 @@ export function MonitorView({
   const liveCount = deployments.filter((d) => d.status === "live").length;
 
   return (
-    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-8 pb-10 pt-16">
-      <div className="rise flex items-start justify-between gap-6">
+    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
+      <div className="rise flex items-start justify-between gap-4 sm:gap-6">
         <div>
           <p className="label">
             live status · {stamp}
           </p>
-          <h1 className="mt-6 text-6xl font-extrabold leading-[0.98] tracking-tight text-cream">
+          <h1 className="mt-6 text-4xl font-extrabold leading-[1.02] tracking-tight text-cream sm:text-5xl sm:leading-[0.98] lg:text-6xl">
             everything you ship,
             <br />
             still <span className="italic text-lime">watched.</span>
@@ -50,7 +50,7 @@ export function MonitorView({
         </button>
       </div>
 
-      <div className="rise mt-8 flex items-center gap-6 border-y border-line py-4 text-[13px]" style={{ animationDelay: "70ms" }}>
+      <div className="rise mt-8 flex items-center gap-4 border-y border-line py-4 text-[13px] sm:gap-6" style={{ animationDelay: "70ms" }}>
         <Summary value={String(deployments.length)} label="apps" />
         <span className="h-8 w-px bg-line" />
         <Summary value={String(liveCount)} label="live" tone="blue" />
@@ -162,7 +162,7 @@ function RunRow({ run }: { run: DeployRun }) {
       <span className="min-w-0 flex-1 truncate text-body">{run.message}</span>
       <Badge tone={tone}>{run.status}</Badge>
       <span className="w-16 text-right text-muted">{run.duration}</span>
-      <span className="w-16 text-right text-muted">{run.when}</span>
+      <span className="hidden w-16 text-right text-muted sm:inline">{run.when}</span>
     </li>
   );
 }

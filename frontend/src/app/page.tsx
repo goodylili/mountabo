@@ -39,9 +39,9 @@ async function DeployData({ account, stamp }: { account: string | null; stamp: s
 
 function DeploySkeleton() {
   return (
-    <main className="mx-auto w-full max-w-[1400px] flex-1 px-8 py-10" aria-busy="true">
+    <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-10 sm:px-6 lg:px-8" aria-busy="true">
       <div className="h-3 w-24 animate-pulse rounded bg-surface-2" />
-      <div className="mt-5 h-10 w-80 animate-pulse rounded-lg bg-surface-2" />
+      <div className="mt-5 h-10 w-full max-w-80 animate-pulse rounded-lg bg-surface-2" />
       <div className="mt-8 flex gap-2">
         <div className="h-9 w-28 animate-pulse rounded-lg bg-surface-2" />
         <div className="h-9 w-28 animate-pulse rounded-lg bg-surface" />

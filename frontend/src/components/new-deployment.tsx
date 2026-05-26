@@ -142,19 +142,20 @@ export function NewDeployment({
 
   return (
     <>
-    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-8 pb-10 pt-16">
+    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       {/* hero */}
       <div className="rise">
         <p className="label">
           new deployment · {stamp}
         </p>
-        <h1 className="mt-6 text-6xl font-extrabold leading-[0.98] tracking-tight text-cream">
+        <h1 className="mt-6 text-4xl font-extrabold leading-[1.02] tracking-tight text-cream sm:text-5xl sm:leading-[0.98] lg:text-6xl">
           deploy something
           <br />
-          of your <span className="italic text-lime">own.</span>
+          of your <span className="italic text-lime">own</span> by{" "}
+          <span className="italic text-lime">yourself.</span>
         </h1>
         <p className="mt-6 max-w-2xl text-[15px] leading-7 text-body">
-          pick a source, point it at a server. mountabo writes{" "}
+          Vercel Style Frontend for your VPS. pick a source, point it at a server. mountabo writes{" "}
           <span className="text-cream">.github/workflows/mountabo-deploy.yml</span> (or a local
           script) and steps out of the way. no middleman, no surprises, nothing leaves your machine.
         </p>
@@ -419,17 +420,17 @@ export function NewDeployment({
       {/* deploy bar: pick a target server, then head to the deployment page */}
       {source && (
         <div className="rise mt-5 flex flex-col gap-3 rounded-xl border border-lime/50 bg-lime/[0.06] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <span className="flex items-center gap-2 text-[14px] text-cream">
-            <span className="text-lime">→ deploy</span>
-            {source}
+          <span className="flex min-w-0 items-center gap-2 text-[14px] text-cream">
+            <span className="shrink-0 text-lime">→ deploy</span>
+            <span className="truncate">{source}</span>
           </span>
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center">
             <ServerSelect servers={readyServers} value={server} onChange={setServer} />
             <Link
               href={configureHref}
               aria-disabled={!ready}
               tabIndex={ready ? 0 : -1}
-              className={`flex items-center gap-2 rounded-md px-4 py-2 text-[13px] font-bold transition-transform ${
+              className={`flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-[13px] font-bold transition-transform sm:py-2 ${
                 ready
                   ? "cta-glow bg-lime-fill text-black hover:-translate-y-0.5"
                   : "pointer-events-none border border-line text-muted opacity-50"

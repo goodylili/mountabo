@@ -61,21 +61,21 @@ export function StreamLog({
   }, [lines]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
-      <div className="flex max-h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-line bg-surface">
-        <div className="flex items-center justify-between border-b border-line px-5 py-3">
-          <span className="flex items-center gap-2 text-[13px] text-cream">
-            {title}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-6">
+      <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-line bg-surface sm:max-h-[80vh]">
+        <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
+          <span className="flex min-w-0 items-center gap-2 text-[13px] text-cream">
+            <span className="truncate">{title}</span>
             {subtitle && (
               <>
                 <span className="text-faint">·</span>
-                <span className="text-muted">{subtitle}</span>
+                <span className="truncate text-muted">{subtitle}</span>
               </>
             )}
           </span>
           <button
             onClick={onClose}
-            className="rounded-md border border-line px-2.5 py-1 text-[12px] text-muted transition-colors hover:text-cream"
+            className="shrink-0 rounded-md border border-line px-2.5 py-1 text-[12px] text-muted transition-colors hover:text-cream"
           >
             {finished ? "close" : "hide"}
           </button>
@@ -83,7 +83,7 @@ export function StreamLog({
 
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto bg-black/30 px-5 py-4 font-mono text-[12px] leading-6"
+          className="flex-1 overflow-y-auto overscroll-contain break-words bg-black/30 px-4 py-4 font-mono text-[12px] leading-6 sm:px-5"
         >
           {lines.length === 0 && <p className="text-muted">connecting…</p>}
           {lines.map((l, i) => (
@@ -101,7 +101,7 @@ export function StreamLog({
           ))}
         </div>
 
-        <div className="flex items-center justify-between border-t border-line px-5 py-2.5 text-[11px] text-muted">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-line px-4 py-2.5 text-[11px] text-muted sm:px-5">
           <span>timestamps in your timezone{timezone ? ` · ${timezone}` : ""}</span>
           <span>{finished ? "finished" : "streaming…"}</span>
         </div>

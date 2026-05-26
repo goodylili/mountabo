@@ -10,7 +10,7 @@ const jetbrains = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "mountabo: deploy something of your own",
+  title: "mountabo: deploy something of your own by yourself",
   description:
     "Deploy your own apps to your own server. One workflow file, then push.",
 };

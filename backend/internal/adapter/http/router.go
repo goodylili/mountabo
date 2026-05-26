@@ -7,6 +7,7 @@ import nethttp "net/http"
 //	POST   /api/github/exchange      exchange an OAuth code for a stored token
 //	GET    /api/github/status        report the connected account, if any
 //	GET    /api/github/repos         list the connected account's repositories
+//	GET    /api/github/ports         detect a repo's published ports (compose/Dockerfile)
 //	DELETE /api/github/token         forget the stored token
 //	POST   /api/servers              add a server (probe specs over SSH)
 //	GET    /api/servers              list added servers
@@ -18,6 +19,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler) *netht
 	mux.HandleFunc("POST /api/github/exchange", gh.Exchange)
 	mux.HandleFunc("GET /api/github/status", gh.Status)
 	mux.HandleFunc("GET /api/github/repos", gh.Repos)
+	mux.HandleFunc("GET /api/github/ports", gh.Ports)
 	mux.HandleFunc("DELETE /api/github/token", gh.Disconnect)
 
 	mux.HandleFunc("POST /api/servers", sv.Add)

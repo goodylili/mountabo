@@ -55,9 +55,15 @@ export type DeployConfig = {
   environment?: string;
   rootDir: string;
   deployDir: string;
-  ports: { frontend: string; backend: string; postgres: string; redis: string };
+  // Host ports mountabo sets for this deployment, one per environment variable
+  // the repo's compose file binds a host port to (e.g. FRONTEND_PORT=3000).
+  // Detected from the project itself, so it is empty for repos that declare no
+  // variable-backed ports.
+  ports: PortVar[];
   envVars: EnvVar[];
 };
+
+export type PortVar = { envVar: string; value: string };
 
 function envNames(cfg: DeployConfig): string[] {
   return cfg.envVars.map((v) => v.key.trim()).filter(Boolean);
@@ -127,7 +133,10 @@ ${envBlock}
 export function generateDeployScript(cfg: DeployConfig): string {
   const root = cfg.rootDir.replace(/^\.?\/*/, "").replace(/\/*$/, ""); // "" for repo root
   const cdRoot = root ? `cd "${root}"\n` : "";
-  const envFileLines = envNames(cfg)
+  // Port env vars detected from the repo's compose file, plus the user's vars.
+  const portExports = cfg.ports.map((p) => `export ${p.envVar}=${p.value}`).join("\n");
+  const portBlock = portExports ? `\n# Ports for this environment (detected from your compose file).\n${portExports}\n` : "";
+  const envFileLines = [...cfg.ports.map((p) => p.envVar), ...envNames(cfg)]
     .map((k) => `${k}=\${${k}}`)
     .join("\n");
 
@@ -139,13 +148,7 @@ DEPLOY_DIR="\${DEPLOY_DIR:-${cfg.deployDir}}/$BRANCH"
 REPO_URL="git@github.com:${cfg.owner}/${cfg.repo}.git"
 
 echo "=== ${cfg.app} deploy (branch: $BRANCH) ==="
-
-# Ports for this environment.
-export FRONTEND_PORT=${cfg.ports.frontend}
-export BACKEND_PORT=${cfg.ports.backend}
-export POSTGRES_PORT=${cfg.ports.postgres}
-export REDIS_PORT=${cfg.ports.redis}
-
+${portBlock}
 mkdir -p "$(dirname "$DEPLOY_DIR")"
 
 if [ -d "$DEPLOY_DIR/.git" ]; then
@@ -162,10 +165,6 @@ fi
 
 ${cdRoot}# Write .env (ports + your environment variables) for docker compose.
 cat > .env <<EOF
-FRONTEND_PORT=\${FRONTEND_PORT}
-BACKEND_PORT=\${BACKEND_PORT}
-POSTGRES_PORT=\${POSTGRES_PORT}
-REDIS_PORT=\${REDIS_PORT}
 ${envFileLines}
 EOF
 

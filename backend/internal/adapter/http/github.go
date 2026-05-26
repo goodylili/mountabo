@@ -124,6 +124,51 @@ func (h *GitHubHandler) Repos(w nethttp.ResponseWriter, r *nethttp.Request) {
 	h.writeJSON(w, nethttp.StatusOK, out)
 }
 
+type portResponse struct {
+	Service   string `json:"service"`
+	EnvVar    string `json:"envVar"`
+	Host      string `json:"host"`
+	Container string `json:"container"`
+	Editable  bool   `json:"editable"`
+}
+
+// Ports reports the published ports declared in a repo's container config so the
+// configure UI can offer the project's real ports. owner and repo are required;
+// ref (branch/sha) and dir (sub-directory) are optional. A repo with no
+// detectable ports returns an empty array, not an error.
+func (h *GitHubHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
+	q := r.URL.Query()
+	owner, repo := q.Get("owner"), q.Get("repo")
+	if owner == "" || repo == "" {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner or repo")
+		return
+	}
+
+	ref := usecase.RepoRef{Owner: owner, Name: repo, Ref: q.Get("ref"), Dir: q.Get("dir")}
+	ports, err := h.connector.DetectPorts(r.Context(), ref)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("detect ports failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not detect ports")
+		return
+	}
+
+	out := make([]portResponse, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, portResponse{
+			Service:   p.Service,
+			EnvVar:    p.EnvVar,
+			Host:      p.Host,
+			Container: p.Container,
+			Editable:  p.Editable,
+		})
+	}
+	h.writeJSON(w, nethttp.StatusOK, out)
+}
+
 // Disconnect removes the stored token from the keychain.
 func (h *GitHubHandler) Disconnect(w nethttp.ResponseWriter, _ *nethttp.Request) {
 	if err := h.connector.Disconnect(); err != nil {

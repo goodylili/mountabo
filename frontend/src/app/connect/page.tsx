@@ -17,12 +17,12 @@ export default async function ConnectPage({
     <div className="flex min-h-screen flex-col">
       <Header crumbs={[{ label: "connect" }]} container="max-w-3xl" />
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-6 py-20">
+      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-12 sm:px-6 sm:py-20">
         <div className="rise">
           <p className="label">
             step 01 / 02 · connect
           </p>
-          <h1 className="mt-7 text-5xl font-extrabold leading-[1.05] tracking-tight text-cream">
+          <h1 className="mt-7 text-3xl font-extrabold leading-[1.1] tracking-tight text-cream sm:text-4xl sm:leading-[1.05] lg:text-5xl">
             grant mountabo <span className="text-lime italic">just</span> what it needs.
           </h1>
           <p className="mt-6 max-w-xl text-[15px] leading-7 text-body">
@@ -88,7 +88,7 @@ export default async function ConnectPage({
               <span className="flex items-center gap-3">
                 <GithubMark /> connect github
               </span>
-              <span className="flex items-center gap-2 text-[13px] font-medium opacity-80">
+              <span className="hidden items-center gap-2 text-[13px] font-medium opacity-80 sm:flex">
                 authorize on github.com <ArrowRight />
               </span>
             </a>

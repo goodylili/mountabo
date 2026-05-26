@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
 import type { Server, Source } from "@/lib/data";
+import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
 import {
   type DeployConfig,
   type EnvVar,
@@ -17,13 +18,6 @@ import {
 } from "@/lib/deploy-template";
 
 type Tab = "workflow" | "script" | "secrets";
-
-const PORT_FIELDS = [
-  ["frontend", "frontend"],
-  ["backend", "backend"],
-  ["postgres", "postgres"],
-  ["redis", "redis"],
-] as const;
 
 export function ConfigureView({
   source,
@@ -39,7 +33,15 @@ export function ConfigureView({
   const [app, setApp] = useState(source.name);
   const [rootDir, setRootDir] = useState("./");
   const [deployDir, setDeployDir] = useState(`/opt/${source.name}`);
-  const [ports, setPorts] = useState({ frontend: "3000", backend: "5001", postgres: "5432", redis: "6379" });
+  // Ports are detected from the repo's own compose file / Dockerfile, never
+  // assumed. `detected` is derived from the resolved result keyed to the current
+  // inputs: while the stored result is for a stale key it reads back as null
+  // ("still detecting"), so changing inputs shows the detecting state without a
+  // synchronous setState in the effect body. [] means nothing to show.
+  const portsKey = `${source.owner}/${source.name}@${branch}:${normalizeDir(rootDir)}`;
+  const [portResult, setPortResult] = useState<{ key: string; ports: DetectedPort[] } | null>(null);
+  const detected = portResult && portResult.key === portsKey ? portResult.ports : null;
+  const [portValues, setPortValues] = useState<Record<string, string>>({});
   const [envVars, setEnvVars] = useState<EnvVar[]>([{ key: "", value: "" }]);
   const [tab, setTab] = useState<Tab>("workflow");
   const [showPaste, setShowPaste] = useState(false);
@@ -53,6 +55,38 @@ export function ConfigureView({
     setImported(parsed.length);
   }
 
+  // Detect the project's ports whenever the repo, branch, or root directory
+  // changes. Seed each editable port's value from the compose default the first
+  // time we see it, leaving any value the user has since typed untouched.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchDetectedPorts(source.owner, source.name, branch, normalizeDir(rootDir), ctrl.signal)
+      .then((ports) => {
+        setPortResult({ key: portsKey, ports });
+        setPortValues((prev) => {
+          const next = { ...prev };
+          for (const p of ports) {
+            if (p.editable && !(p.envVar in next)) next[p.envVar] = p.host;
+          }
+          return next;
+        });
+      })
+      .catch((e: unknown) => {
+        if ((e as { name?: string })?.name !== "AbortError") setPortResult({ key: portsKey, ports: [] });
+      });
+    return () => ctrl.abort();
+  }, [source.owner, source.name, branch, rootDir, portsKey]);
+
+  // The host ports mountabo will set: the editable (env-var-backed) detected
+  // ports, each carrying the user's value or the compose default.
+  const editablePorts = useMemo(
+    () =>
+      (detected ?? [])
+        .filter((p) => p.editable)
+        .map((p) => ({ envVar: p.envVar, value: portValues[p.envVar] ?? p.host })),
+    [detected, portValues],
+  );
+
   const cfg: DeployConfig = useMemo(
     () => ({
       app: app.trim() || source.name,
@@ -61,10 +95,10 @@ export function ConfigureView({
       branch,
       rootDir,
       deployDir,
-      ports,
+      ports: editablePorts,
       envVars,
     }),
-    [app, source.owner, source.name, branch, rootDir, deployDir, ports, envVars],
+    [app, source.owner, source.name, branch, rootDir, deployDir, editablePorts, envVars],
   );
 
   const workflow = useMemo(() => generateWorkflow(cfg), [cfg]);
@@ -76,17 +110,17 @@ export function ConfigureView({
   }
 
   return (
-    <main className="mx-auto grid w-full max-w-[1400px] flex-1 grid-cols-1 gap-x-12 px-8 py-10 lg:grid-cols-[1fr_1fr]">
+    <main className="mx-auto grid w-full max-w-[1400px] flex-1 grid-cols-1 gap-x-12 gap-y-10 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_1fr] lg:px-8 lg:py-10">
       {/* ── left: the walkthrough form ── */}
       <div className="rise flex flex-col">
         <p className="label">step 02 / 02 · configure</p>
-        <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] tracking-tight text-cream">
-          configure your deploy.
+        <h1 className="mt-5 text-3xl font-extrabold leading-[1.1] tracking-tight text-cream sm:text-4xl sm:leading-[1.05]">
+          configure your deployment.
         </h1>
 
         <div className="mt-5 rounded-lg border border-line bg-surface px-4 py-3 text-[13px]">
           <span className="text-muted">importing from</span>
-          <div className="mt-1.5 flex items-center gap-2 text-cream">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-cream">
             <GithubMark />
             {source.owner}/{source.name}
             <span className="flex items-center gap-1 text-muted">
@@ -110,21 +144,36 @@ export function ConfigureView({
           <input value={deployDir} onChange={(e) => setDeployDir(e.target.value)} className={inputCls} placeholder={`/opt/${source.name}`} />
         </Section>
 
-        <Section label="ports" hint="this environment">
-          <div className="grid grid-cols-2 gap-3">
-            {PORT_FIELDS.map(([key, lbl]) => (
-              <label key={key} className="block">
-                <span className="mb-1 block text-[11px] text-muted">{lbl}</span>
-                <input
-                  value={ports[key]}
-                  onChange={(e) => setPorts((p) => ({ ...p, [key]: e.target.value }))}
-                  inputMode="numeric"
-                  className={inputCls}
-                />
-              </label>
-            ))}
-          </div>
-        </Section>
+        {(detected === null || detected.length > 0) && (
+          <Section label="ports" hint="detected from your project">
+            {detected === null ? (
+              <p className="text-[12px] text-muted">detecting ports from docker-compose.yml...</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                {detected.map((p, i) => (
+                  <label key={`${p.service}-${p.envVar}-${p.container}-${i}`} className="block">
+                    <span className="mb-1 block text-[11px] text-muted">
+                      {p.editable ? p.envVar : p.service || `port ${p.container}`}
+                    </span>
+                    {p.editable ? (
+                      <input
+                        value={portValues[p.envVar] ?? p.host}
+                        onChange={(e) => setPortValues((v) => ({ ...v, [p.envVar]: e.target.value }))}
+                        inputMode="numeric"
+                        className={inputCls}
+                      />
+                    ) : (
+                      <div className={`${inputCls} flex items-center justify-between`} title="fixed in your compose file">
+                        <span>{p.host || "auto"}</span>
+                        <span className="text-[11px] text-faint">fixed</span>
+                      </div>
+                    )}
+                  </label>
+                ))}
+              </div>
+            )}
+          </Section>
+        )}
 
         <Section label="environment variables" hint="become encrypted repo secrets">
           {/* Import a whole .env at once: paste it or pick a file. Parsing is
@@ -192,14 +241,14 @@ export function ConfigureView({
                   value={row.key}
                   onChange={(e) => setEnv(i, { key: e.target.value })}
                   placeholder="KEY"
-                  className={`${inputCls} flex-1 font-mono`}
+                  className={`${inputCls} min-w-0 flex-1 font-mono`}
                 />
                 <input
                   value={row.value}
                   onChange={(e) => setEnv(i, { value: e.target.value })}
                   placeholder="value"
                   type="password"
-                  className={`${inputCls} flex-1`}
+                  className={`${inputCls} min-w-0 flex-1`}
                 />
                 <button
                   onClick={() => setEnvVars((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))}

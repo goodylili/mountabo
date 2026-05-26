@@ -35,8 +35,9 @@ func run() error {
 	keyStore := keychain.NewStore()
 
 	// Compose the GitHub connection flow: OAuth exchange + account lookup + repo
-	// listing (all github) + token persistence (keychain), driven by the
-	// connector. One github.Client serves both account and repo reads.
+	// listing + port detection (all github) + token persistence (keychain),
+	// driven by the connector. One github.Client serves account, repo, and
+	// container-config reads.
 	ghClient := github.NewClient()
 	// The OAuth adapter both exchanges codes and refreshes tokens; the token
 	// manager wraps the keychain store so every Load returns a still-valid token
@@ -46,6 +47,7 @@ func run() error {
 	tokens := usecase.NewTokenManager(keyStore, oauth)
 	connector := usecase.NewGitHubConnector(
 		oauth,
+		ghClient,
 		ghClient,
 		ghClient,
 		tokens,
