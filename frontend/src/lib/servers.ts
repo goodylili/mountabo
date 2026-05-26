@@ -25,6 +25,15 @@ export type ServerView = {
   fingerprint: string;
   createdAt: string;
   options: string[] | null;
+  history?: ChangeEvent[] | null;
+};
+
+// A recorded configuration change applied to a server.
+export type ChangeEvent = {
+  at: string;
+  added?: string[];
+  removed?: string[];
+  status: string; // "applied" | "failed"
 };
 
 // A parameter an option needs (collected inline when ticked).

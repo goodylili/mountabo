@@ -64,6 +64,29 @@ type Server struct {
 	// Options are the ids of opt-in hardening settings currently applied to the
 	// server (persisted). Toggled per-server and applied live via ApplyOptions.
 	Options []string `json:"options"`
+	// History is the record of configuration changes applied to this server,
+	// oldest first, capped to the most recent entries.
+	History []ChangeEvent `json:"history,omitempty"`
+}
+
+// ChangeEvent records one configuration change applied to a server: which
+// options were turned on (Added) / off (Removed), when, and whether it stuck.
+type ChangeEvent struct {
+	At      time.Time `json:"at"`
+	Added   []string  `json:"added,omitempty"`
+	Removed []string  `json:"removed,omitempty"`
+	Status  string    `json:"status"` // "applied" | "failed"
+}
+
+// maxHistory caps how many change events are kept per server.
+const maxHistory = 50
+
+func appendHistory(h []ChangeEvent, e ChangeEvent) []ChangeEvent {
+	h = append(h, e)
+	if len(h) > maxHistory {
+		h = h[len(h)-maxHistory:]
+	}
+	return h
 }
 
 // SSHTarget is where and how to reach a server over SSH.
@@ -445,11 +468,20 @@ func (s *ServerService) ApplyOptions(ctx context.Context, id string, desired []s
 	}
 
 	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
-	if err := s.applier.ApplyOptions(ctx, target, add, remove, params, out); err != nil {
-		return fmt.Errorf("apply options: %w", err)
+	event := ChangeEvent{At: time.Now().UTC(), Added: add, Removed: remove, Status: "applied"}
+
+	if applyErr := s.applier.ApplyOptions(ctx, target, add, remove, params, out); applyErr != nil {
+		// Record the failed attempt (Options unchanged) so the history is honest.
+		event.Status = "failed"
+		server.History = appendHistory(server.History, event)
+		if err := s.store.Save(server); err != nil {
+			return fmt.Errorf("save server after failed apply: %w", err)
+		}
+		return fmt.Errorf("apply options: %w", applyErr)
 	}
 
 	server.Options = desired
+	server.History = appendHistory(server.History, event)
 	if err := s.store.Save(server); err != nil {
 		return fmt.Errorf("save server: %w", err)
 	}

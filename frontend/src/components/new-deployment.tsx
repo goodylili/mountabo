@@ -62,8 +62,20 @@ export function NewDeployment({
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
   }
 
-  function updateServerOptions(id: string, options: string[]) {
-    setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, options } : s)));
+  // After a successful apply, update the server's options AND append a change
+  // event locally so the history timeline and undo stay current without a refetch.
+  function recordApply(target: ServerView, desired: string[]) {
+    const prev = target.options ?? [];
+    const prevSet = new Set(prev);
+    const desiredSet = new Set(desired);
+    const added = desired.filter((id) => !prevSet.has(id));
+    const removed = prev.filter((id) => !desiredSet.has(id));
+    const event = { at: new Date().toISOString(), added, removed, status: "applied" };
+    setServerList((list) =>
+      list.map((s) =>
+        s.id === target.id ? { ...s, options: desired, history: [...(s.history ?? []), event] } : s,
+      ),
+    );
   }
 
   // The hardening catalog (id/name/description) for the per-server toggles.
@@ -464,7 +476,7 @@ export function NewDeployment({
         timezone={applyTarget.server.timezone}
         url={applyUrl(applyTarget.server.id, applyTarget.desired, applyTarget.params)}
         onDone={(ok) => {
-          if (ok) updateServerOptions(applyTarget.server.id, applyTarget.desired);
+          if (ok) recordApply(applyTarget.server, applyTarget.desired);
         }}
         onClose={() => setApplyTarget(null)}
       />

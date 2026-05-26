@@ -52,6 +52,25 @@ export function ServerOptions({
     onApply(desired, params);
   }
 
+  const nameOf = (id: string) => catalog.find((o) => o.id === id)?.name ?? id;
+
+  // Undo reverses a change event: disable what it enabled, re-enable what it
+  // disabled, then apply the resulting set (re-supplying param defaults for any
+  // param-option being re-enabled).
+  function undoEvent(ev: { added?: string[]; removed?: string[] }) {
+    const cur = new Set(server.options ?? []);
+    (ev.added ?? []).forEach((a) => cur.delete(a));
+    (ev.removed ?? []).forEach((r) => cur.add(r));
+    const desired = [...cur];
+    const params: Record<string, Record<string, string>> = {};
+    for (const o of catalog) {
+      if (cur.has(o.id) && o.params?.length) {
+        params[o.id] = Object.fromEntries(o.params.map((p) => [p.key, paramVal(o.id, p)]));
+      }
+    }
+    onApply(desired, params);
+  }
+
   return (
     <div className="border-t border-line px-4 py-4">
       <p className="text-[12px] text-muted">
@@ -131,6 +150,58 @@ export function ServerOptions({
             ? "fill in the required fields above"
             : `confirm & apply ${changed} change${changed === 1 ? "" : "s"}`}
       </button>
+
+      <ChangeHistory server={server} nameOf={nameOf} onUndo={undoEvent} />
+    </div>
+  );
+}
+
+function ChangeHistory({
+  server,
+  nameOf,
+  onUndo,
+}: {
+  server: ServerView;
+  nameOf: (id: string) => string;
+  onUndo: (ev: { added?: string[]; removed?: string[] }) => void;
+}) {
+  const events = (server.history ?? []).slice().reverse().slice(0, 8);
+  if (events.length === 0) return null;
+
+  return (
+    <div className="mt-5 border-t border-line pt-3">
+      <p className="label">change history</p>
+      <ul className="mt-2 space-y-1.5">
+        {events.map((ev, i) => {
+          const reversible = ev.status === "applied" && ((ev.added?.length ?? 0) + (ev.removed?.length ?? 0)) > 0;
+          return (
+            <li key={i} className="flex items-center gap-3 text-[12px]">
+              <span className="w-28 shrink-0 text-faint">{new Date(ev.at).toLocaleString()}</span>
+              <span className="min-w-0 flex-1 truncate">
+                {(ev.added ?? []).map((id) => (
+                  <span key={id} className="text-lime">
+                    +{nameOf(id)}{" "}
+                  </span>
+                ))}
+                {(ev.removed ?? []).map((id) => (
+                  <span key={id} className="text-muted">
+                    −{nameOf(id)}{" "}
+                  </span>
+                ))}
+              </span>
+              {ev.status === "failed" && <span className="text-[11px] text-red-300">failed</span>}
+              {reversible && (
+                <button
+                  onClick={() => onUndo(ev)}
+                  className="shrink-0 rounded border border-line px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-lime/50 hover:text-lime"
+                >
+                  undo
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

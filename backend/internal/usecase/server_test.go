@@ -106,6 +106,27 @@ func TestApplyOptions_DiffsPersistsAndOrders(t *testing.T) {
 	if len(got.Options) != 2 {
 		t.Errorf("persisted options = %v, want 2 entries", got.Options)
 	}
+	if len(got.History) != 1 || got.History[0].Status != "applied" {
+		t.Errorf("expected one applied history event, got %+v", got.History)
+	}
+}
+
+func TestApplyOptions_RecordsFailedChange(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{err: io.ErrClosedPipe}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	_ = store.Save(Server{ID: "s1", Status: StatusReady, Options: nil})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
+
+	if err := svc.ApplyOptions(context.Background(), "s1", []string{"firewall"}, nil, io.Discard); err == nil {
+		t.Fatal("expected apply error")
+	}
+	got, _ := store.Get("s1")
+	if len(got.Options) != 0 {
+		t.Error("options should be unchanged after a failed apply")
+	}
+	if len(got.History) != 1 || got.History[0].Status != "failed" {
+		t.Errorf("expected one failed history event, got %+v", got.History)
+	}
 }
 
 func TestApplyOptions_RequiresReady(t *testing.T) {
