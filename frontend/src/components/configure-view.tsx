@@ -7,6 +7,7 @@ import { RepoTreePicker } from "@/components/repo-tree-picker";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
 import type { Server, Source } from "@/lib/data";
 import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
+import { fetchListeningPorts } from "@/lib/server-ports";
 import {
   type DeployConfig,
   type EnvVar,
@@ -50,6 +51,11 @@ export function ConfigureView({
   const [imported, setImported] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Ports already listening on the selected server. A host port in this set is
+  // flagged as a collision in the form (but never changed, the operator decides).
+  const [busyPorts, setBusyPorts] = useState<{ id: string; ports: Set<number> } | null>(null);
+  const busy = busyPorts && busyPorts.id === server.id ? busyPorts.ports : null;
+
   function importEnv(text: string) {
     const parsed = parseEnvFile(text);
     setEnvVars((rows) => mergeEnv(rows, parsed));
@@ -77,6 +83,17 @@ export function ConfigureView({
       });
     return () => ctrl.abort();
   }, [source.owner, source.name, branch, rootDir, portsKey]);
+
+  // Load the ports already in use on the selected server so the form can flag a
+  // host port that would collide. Keyed to the server id so a stale set reads
+  // back as null until the new server's ports load.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchListeningPorts(server.id, ctrl.signal)
+      .then((ports) => setBusyPorts({ id: server.id, ports: new Set(ports) }))
+      .catch(() => setBusyPorts({ id: server.id, ports: new Set() }));
+    return () => ctrl.abort();
+  }, [server.id]);
 
   // The host ports mountabo will set: the editable (env-var-backed) detected
   // ports, each carrying the user's value or the compose default.
@@ -159,26 +176,36 @@ export function ConfigureView({
               <p className="text-[12px] text-muted">detecting ports from docker-compose.yml...</p>
             ) : (
               <div className="grid grid-cols-2 gap-3">
-                {detected.map((p, i) => (
-                  <label key={`${p.service}-${p.envVar}-${p.container}-${i}`} className="block">
-                    <span className="mb-1 block text-[11px] text-muted">
-                      {p.editable ? p.envVar : p.service || `port ${p.container}`}
-                    </span>
-                    {p.editable ? (
-                      <input
-                        value={portValues[p.envVar] ?? p.host}
-                        onChange={(e) => setPortValues((v) => ({ ...v, [p.envVar]: e.target.value }))}
-                        inputMode="numeric"
-                        className={inputCls}
-                      />
-                    ) : (
-                      <div className={`${inputCls} flex items-center justify-between`} title="fixed in your compose file">
-                        <span>{p.host || "auto"}</span>
-                        <span className="text-[11px] text-faint">fixed</span>
-                      </div>
-                    )}
-                  </label>
-                ))}
+                {detected.map((p, i) => {
+                  const value = portValues[p.envVar] ?? p.host;
+                  const occupied = p.editable && !!busy && value.trim() !== "" && busy.has(Number(value));
+                  return (
+                    <label key={`${p.service}-${p.envVar}-${p.container}-${i}`} className="block">
+                      <span className="mb-1 flex items-center gap-1.5 text-[11px] text-muted">
+                        {p.editable ? p.envVar : p.service || `port ${p.container}`}
+                        {occupied && (
+                          <span className="text-red-300" title={`${value} is already in use on ${server.name}`}>
+                            {"\u{1F6AB}"} in use on the server
+                          </span>
+                        )}
+                      </span>
+                      {p.editable ? (
+                        <input
+                          value={value}
+                          onChange={(e) => setPortValues((v) => ({ ...v, [p.envVar]: e.target.value }))}
+                          inputMode="numeric"
+                          aria-invalid={occupied}
+                          className={`${inputCls} ${occupied ? "border-red-400/60" : ""}`}
+                        />
+                      ) : (
+                        <div className={`${inputCls} flex items-center justify-between`} title="fixed in your compose file">
+                          <span>{p.host || "auto"}</span>
+                          <span className="text-[11px] text-faint">fixed</span>
+                        </div>
+                      )}
+                    </label>
+                  );
+                })}
               </div>
             )}
           </Section>
