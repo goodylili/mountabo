@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	nethttp "net/http"
 	"strings"
@@ -79,27 +80,41 @@ func (h *ServersHandler) List(w nethttp.ResponseWriter, _ *nethttp.Request) {
 	h.writeJSON(w, nethttp.StatusOK, servers)
 }
 
-// Setup runs the bootstrap on a server and streams progress to the client as
-// Server-Sent Events: each output line is a `data:` event, ending with a
-// terminal `done` or `error` event. The per-response write deadline is cleared
-// because the bootstrap can run for many minutes.
+// Setup runs the bootstrap on a server, streaming progress as Server-Sent Events.
 func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := r.PathValue("id")
-
-	// Opt-in hardening options are passed as ?options=firewall,fail2ban — empty
-	// means base setup only. usecase canonicalises/validates them.
 	var options []string
 	if raw := r.URL.Query().Get("options"); raw != "" {
 		options = strings.Split(raw, ",")
 	}
+	h.stream(w, "server is ready", func(out io.Writer) error {
+		return h.svc.Setup(r.Context(), id, options, out)
+	})
+}
 
+// ApplyOptions enables/disables hardening options on a server to match the
+// ?set=… selection, streaming the live log as SSE.
+func (h *ServersHandler) ApplyOptions(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	var desired []string
+	if raw := r.URL.Query().Get("set"); raw != "" {
+		desired = strings.Split(raw, ",")
+	}
+	h.stream(w, "settings applied", func(out io.Writer) error {
+		return h.svc.ApplyOptions(r.Context(), id, desired, out)
+	})
+}
+
+// stream runs a long, output-producing operation and relays it as Server-Sent
+// Events: each output line is a `data:` event, ending with a terminal `done`
+// (with successMsg) or `error` event. The per-response write deadline is
+// cleared because these can run for many minutes.
+func (h *ServersHandler) stream(w nethttp.ResponseWriter, successMsg string, run func(io.Writer) error) {
 	flusher, ok := w.(nethttp.Flusher)
 	if !ok {
 		h.writeError(w, nethttp.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-	// The bootstrap can take 20+ minutes; clear the server's write timeout for
-	// this streaming response only.
 	if err := nethttp.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
 		h.log.Warn("clear write deadline", "err", err)
 	}
@@ -112,22 +127,21 @@ func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 	flusher.Flush()
 
 	sw := &sseWriter{w: w, flusher: flusher}
-	err := h.svc.Setup(r.Context(), id, options, sw)
+	err := run(sw)
 	sw.flushPartial()
 
 	switch {
 	case err == nil:
-		sw.event("done", "server is ready")
+		sw.event("done", successMsg)
 	case errors.Is(err, usecase.ErrServerNotFound):
 		sw.event("error", "server not found")
 	case errors.Is(err, usecase.ErrSetupInProgress):
-		sw.event("error", "setup is already running for this server")
+		sw.event("error", "another setup/apply is already running for this server")
 	default:
-		h.log.Error("server setup failed", "id", id, "err", err)
-		// Surface the (secret-free) reason in the stream so the user can see why,
-		// then the terminal error event. Newlines are flattened for SSE framing.
+		h.log.Error("stream operation failed", "err", err)
+		// Surface the (secret-free) reason, then the terminal error event.
 		sw.data("✗ " + strings.ReplaceAll(err.Error(), "\n", " "))
-		sw.event("error", "setup failed")
+		sw.event("error", "failed")
 	}
 }
 
@@ -181,7 +195,6 @@ func (s *sseWriter) Write(p []byte) (int, error) {
 }
 
 func (s *sseWriter) data(line string) {
-	//nolint:gosec // G705 false positive: this is an SSE stream (text/event-stream) consumed by EventSource as data, not an HTML sink
 	_, _ = fmt.Fprintf(s.w, "data: %s\n\n", strings.TrimRight(line, "\r"))
 	s.flusher.Flush()
 }

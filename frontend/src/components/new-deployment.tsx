@@ -17,9 +17,10 @@ import {
   Shield,
 } from "@/components/icons";
 import { AddServerForm } from "@/components/add-server-form";
-import { SetupLog } from "@/components/setup-log";
+import { ServerOptions } from "@/components/server-options";
+import { StreamLog } from "@/components/stream-log";
 import type { Source } from "@/lib/data";
-import type { ServerStatus, ServerView } from "@/lib/servers";
+import type { ServerStatus, ServerView, SetupOption } from "@/lib/servers";
 
 const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
   ready: "blue",
@@ -48,10 +49,30 @@ export function NewDeployment({
   const [showAddServer, setShowAddServer] = useState(false);
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
   const [page, setPage] = useState(0);
+  const [catalog, setCatalog] = useState<SetupOption[]>([]);
+  const [applyTarget, setApplyTarget] = useState<{ server: ServerView; desired: string[] } | null>(null);
 
   function setServerStatus(id: string, status: ServerStatus) {
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
   }
+
+  function updateServerOptions(id: string, options: string[]) {
+    setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, options } : s)));
+  }
+
+  // The hardening catalog (id/name/description) for the per-server toggles.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/servers/options")
+      .then((r) => r.json())
+      .then((o) => {
+        if (active) setCatalog(o as SetupOption[]);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // ⌘K / ctrl-K focuses the palette; Enter continues when both are picked.
   useEffect(() => {
@@ -289,6 +310,14 @@ export function NewDeployment({
                       </button>
                     )}
                   </div>
+                  {active && s.status === "ready" && (
+                    <ServerOptions
+                      key={`${s.id}:${(s.options ?? []).join(",")}`}
+                      server={s}
+                      catalog={catalog}
+                      onApply={(desired) => setApplyTarget({ server: s, desired })}
+                    />
+                  )}
                 </li>
               );
             })}
@@ -352,10 +381,25 @@ export function NewDeployment({
     </main>
 
     {setupTarget && (
-      <SetupLog
-        server={setupTarget}
-        onStatus={(status) => setServerStatus(setupTarget.id, status)}
+      <StreamLog
+        title={`setting up ${setupTarget.name}`}
+        subtitle={setupTarget.ip}
+        timezone={setupTarget.timezone}
+        url={`/api/servers/${setupTarget.id}/setup`}
+        onDone={(ok) => setServerStatus(setupTarget.id, ok ? "ready" : "failed")}
         onClose={() => setSetupTarget(null)}
+      />
+    )}
+    {applyTarget && (
+      <StreamLog
+        title={`applying settings to ${applyTarget.server.name}`}
+        subtitle={applyTarget.server.ip}
+        timezone={applyTarget.server.timezone}
+        url={`/api/servers/${applyTarget.server.id}/options?set=${encodeURIComponent(applyTarget.desired.join(","))}`}
+        onDone={(ok) => {
+          if (ok) updateServerOptions(applyTarget.server.id, applyTarget.desired);
+        }}
+        onClose={() => setApplyTarget(null)}
       />
     )}
     </>

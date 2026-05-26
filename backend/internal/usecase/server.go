@@ -61,6 +61,9 @@ type Server struct {
 	// UserPublicKey is the operator's own SSH public key (a public value, safe to
 	// store) installed alongside mountabo's so the human can also reach the box.
 	UserPublicKey string `json:"userPublicKey,omitempty"`
+	// Options are the ids of opt-in hardening settings currently applied to the
+	// server (persisted). Toggled per-server and applied live via ApplyOptions.
+	Options []string `json:"options"`
 }
 
 // SSHTarget is where and how to reach a server over SSH.
@@ -69,6 +72,9 @@ type SSHTarget struct {
 	Port     int
 	User     string
 	Password string
+	// PrivateKey, when set, is used for key-based auth (the mountabo user)
+	// instead of Password (used for the initial root connection).
+	PrivateKey string
 	// Fingerprint is the expected SHA256 host key fingerprint. Empty means
 	// trust-on-first-use: the dialer captures and returns the key's fingerprint
 	// so it can be pinned. Non-empty means the connection MUST present this exact
@@ -153,6 +159,13 @@ type ServerBootstrapper interface {
 	Bootstrap(ctx context.Context, t SSHTarget, p BootstrapParams, out io.Writer) error
 }
 
+// OptionApplier enables/disables hardening options on an already-set-up server
+// (connecting as the mountabo user via its key, running with sudo), streaming
+// output to out. add and remove are option ids in catalog order.
+type OptionApplier interface {
+	ApplyOptions(ctx context.Context, t SSHTarget, add, remove []string, out io.Writer) error
+}
+
 // KeyMaker generates an SSH keypair for mountabo's access to a server.
 type KeyMaker interface {
 	Generate(comment string) (privatePEM, publicKey string, err error)
@@ -196,17 +209,18 @@ type ServerService struct {
 	store     ServerStore
 	prober    ServerProber
 	boot      ServerBootstrapper
+	applier   OptionApplier
 	keys      KeyMaker
 	localKeys LocalKeyProvider
 	vault     SecretVault
 
 	mu        sync.Mutex
-	settingUp map[string]bool // server ids with a bootstrap in flight
+	settingUp map[string]bool // server ids with a bootstrap/apply in flight
 }
 
 // NewServerService wires the service to its ports.
-func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, keys KeyMaker, localKeys LocalKeyProvider, vault SecretVault) *ServerService {
-	return &ServerService{store: store, prober: prober, boot: boot, keys: keys, localKeys: localKeys, vault: vault, settingUp: map[string]bool{}}
+func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, applier OptionApplier, keys KeyMaker, localKeys LocalKeyProvider, vault SecretVault) *ServerService {
+	return &ServerService{store: store, prober: prober, boot: boot, applier: applier, keys: keys, localKeys: localKeys, vault: vault, settingUp: map[string]bool{}}
 }
 
 // Add connects to the server with the root password, probes its specs, and
@@ -363,6 +377,75 @@ func (s *ServerService) Setup(ctx context.Context, id string, options []string, 
 		return fmt.Errorf("save server: %w", err)
 	}
 	return nil
+}
+
+// ApplyOptions changes which hardening options are applied to an already-set-up
+// server to match desired: it connects as the mountabo user with the stored key
+// (root password not needed) and runs the enable scripts for newly-ticked
+// options and the disable scripts for unticked ones, streaming to out, then
+// persists the new set. Only valid once the server is ready (the mountabo key
+// exists).
+func (s *ServerService) ApplyOptions(ctx context.Context, id string, desired []string, out io.Writer) error {
+	s.mu.Lock()
+	if s.settingUp[id] {
+		s.mu.Unlock()
+		return ErrSetupInProgress
+	}
+	s.settingUp[id] = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.settingUp, id)
+		s.mu.Unlock()
+	}()
+
+	server, err := s.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if server.Status != StatusReady {
+		return fmt.Errorf("server must be set up before changing options")
+	}
+
+	key, err := s.vault.LoadSecret(privateKeyKey(id))
+	if err != nil {
+		return fmt.Errorf("load mountabo key: %w", err)
+	}
+
+	desired = canonicalOptions(desired)
+	current := canonicalOptions(server.Options)
+	add := subtract(desired, current)
+	remove := subtract(current, desired)
+	if len(add) == 0 && len(remove) == 0 {
+		_, _ = io.WriteString(out, "==> no changes to apply\n")
+		return nil
+	}
+
+	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
+	if err := s.applier.ApplyOptions(ctx, target, add, remove, out); err != nil {
+		return fmt.Errorf("apply options: %w", err)
+	}
+
+	server.Options = desired
+	if err := s.store.Save(server); err != nil {
+		return fmt.Errorf("save server: %w", err)
+	}
+	return nil
+}
+
+// subtract returns the ids in a that are not in b, preserving a's order.
+func subtract(a, b []string) []string {
+	inB := map[string]bool{}
+	for _, x := range b {
+		inB[x] = true
+	}
+	var out []string
+	for _, x := range a {
+		if !inB[x] {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 // Remove deletes a server and destroys its secrets, completing the key

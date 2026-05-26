@@ -24,6 +24,7 @@ export type ServerView = {
   specs: ServerSpecs;
   fingerprint: string;
   createdAt: string;
+  options: string[] | null;
 };
 
 // An opt-in hardening step the operator can choose at setup time.

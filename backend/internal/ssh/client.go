@@ -27,15 +27,16 @@ import (
 //go:embed scripts/bootstrap.sh.tmpl scripts/options
 var scripts embed.FS
 
-// optionScripts maps an opt-in option id (e.g. "firewall") to its shell
-// fragment, loaded once from the embedded scripts/options directory.
-var optionScripts = loadOptionScripts()
+// optionScripts/optionDisableScripts map an opt-in option id (e.g. "firewall")
+// to its enable / disable shell fragment, loaded once from scripts/options.
+// "<id>.sh" is the enable fragment; "<id>.disable.sh" is the disable fragment.
+var optionScripts, optionDisableScripts = loadOptionScripts()
 
-func loadOptionScripts() map[string]string {
-	out := map[string]string{}
+func loadOptionScripts() (enable, disable map[string]string) {
+	enable, disable = map[string]string{}, map[string]string{}
 	entries, err := scripts.ReadDir("scripts/options")
 	if err != nil {
-		return out
+		return enable, disable
 	}
 	for _, e := range entries {
 		name := e.Name()
@@ -46,9 +47,13 @@ func loadOptionScripts() map[string]string {
 		if err != nil {
 			continue
 		}
-		out[strings.TrimSuffix(name, ".sh")] = string(data)
+		if strings.HasSuffix(name, ".disable.sh") {
+			disable[strings.TrimSuffix(name, ".disable.sh")] = string(data)
+		} else {
+			enable[strings.TrimSuffix(name, ".sh")] = string(data)
+		}
 	}
-	return out
+	return enable, disable
 }
 
 // Client connects to servers over SSH. One Client serves probing, bootstrap,
@@ -60,6 +65,7 @@ type Client struct {
 var (
 	_ usecase.ServerProber       = (*Client)(nil)
 	_ usecase.ServerBootstrapper = (*Client)(nil)
+	_ usecase.OptionApplier      = (*Client)(nil)
 	_ usecase.KeyMaker           = (*Client)(nil)
 	_ usecase.LocalKeyProvider   = (*Client)(nil)
 )
@@ -84,9 +90,22 @@ func (c *Client) dial(ctx context.Context, t usecase.SSHTarget) (*ssh.Client, st
 		}
 		return nil
 	}
+	// Key auth (the mountabo user) when a private key is provided; otherwise
+	// password auth (the initial root connection).
+	var auth ssh.AuthMethod
+	if t.PrivateKey != "" {
+		signer, perr := ssh.ParsePrivateKey([]byte(t.PrivateKey))
+		if perr != nil {
+			return nil, "", fmt.Errorf("parse private key: %w", perr)
+		}
+		auth = ssh.PublicKeys(signer)
+	} else {
+		auth = ssh.Password(t.Password)
+	}
+
 	cfg := &ssh.ClientConfig{
 		User:            t.User,
-		Auth:            []ssh.AuthMethod{ssh.Password(t.Password)},
+		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: verify,
 		Timeout:         c.dialTimeout,
 	}
@@ -167,7 +186,49 @@ func (c *Client) Bootstrap(ctx context.Context, t usecase.SSHTarget, p usecase.B
 	if err != nil {
 		return err
 	}
+	// Connected as root (password); run the script directly.
+	if err := c.runScript(ctx, t, "bash -s", script, out); err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
+	}
+	return nil
+}
 
+// ApplyOptions runs the disable fragments for removed options then the enable
+// fragments for added ones, as root via sudo, over the mountabo-user key
+// connection. Streams combined output to out.
+func (c *Client) ApplyOptions(ctx context.Context, t usecase.SSHTarget, add, remove []string, out io.Writer) error {
+	// Connected as the mountabo user; run as root via passwordless sudo.
+	if err := c.runScript(ctx, t, "sudo -n bash -s", composeApply(add, remove), out); err != nil {
+		return fmt.Errorf("apply options: %w", err)
+	}
+	return nil
+}
+
+func composeApply(add, remove []string) string {
+	var b strings.Builder
+	b.WriteString("set -euo pipefail\nexport DEBIAN_FRONTEND=noninteractive\nlog() { echo \"==> $*\"; }\n")
+	if len(add) > 0 {
+		b.WriteString("apt-get update -y\n")
+	}
+	for _, id := range remove {
+		if frag, ok := optionDisableScripts[id]; ok {
+			b.WriteString("\n")
+			b.WriteString(frag)
+		}
+	}
+	for _, id := range add {
+		if frag, ok := optionScripts[id]; ok {
+			b.WriteString("\n")
+			b.WriteString(frag)
+		}
+	}
+	b.WriteString("\nlog \"settings applied\"\n")
+	return b.String()
+}
+
+// runScript dials, streams the script to `command` over a session (cancelling on
+// ctx), and reports a non-zero exit as an error.
+func (c *Client) runScript(ctx context.Context, t usecase.SSHTarget, command, script string, out io.Writer) error {
 	client, _, err := c.dial(ctx, t)
 	if err != nil {
 		return err
@@ -195,8 +256,8 @@ func (c *Client) Bootstrap(ctx context.Context, t usecase.SSHTarget, p usecase.B
 		}
 	}()
 
-	if err := session.Run("bash -s"); err != nil {
-		return fmt.Errorf("bootstrap script: %w", err)
+	if err := session.Run(command); err != nil {
+		return fmt.Errorf("run %q: %w", command, err)
 	}
 	return nil
 }

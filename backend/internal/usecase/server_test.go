@@ -24,6 +24,17 @@ func (f fakeBootstrapper) Bootstrap(_ context.Context, _ SSHTarget, _ BootstrapP
 	return f.err
 }
 
+type fakeApplier struct {
+	add, remove []string
+	err         error
+}
+
+func (f *fakeApplier) ApplyOptions(_ context.Context, _ SSHTarget, add, remove []string, out io.Writer) error {
+	f.add, f.remove = add, remove
+	_, _ = io.WriteString(out, "==> applying options\n")
+	return f.err
+}
+
 type fakeKeyMaker struct{}
 
 func (fakeKeyMaker) Generate(string) (string, string, error) {
@@ -71,7 +82,39 @@ func (m *memServerStore) Delete(id string) error {
 }
 
 func newService(store ServerStore, vault SecretVault, boot ServerBootstrapper) *ServerService {
-	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, &fakeApplier{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+}
+
+func TestApplyOptions_DiffsPersistsAndOrders(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	applier := &fakeApplier{}
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, applier, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	_ = store.Save(Server{ID: "s1", IP: "1.2.3.4", SSHPort: 22, Status: StatusReady, Options: []string{"firewall"}})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY-PEM")
+
+	if err := svc.ApplyOptions(context.Background(), "s1", []string{"harden-ssh", "fail2ban"}, io.Discard); err != nil {
+		t.Fatalf("ApplyOptions: %v", err)
+	}
+	// add in catalog order (fail2ban before harden-ssh); remove = firewall
+	if len(applier.add) != 2 || applier.add[0] != "fail2ban" || applier.add[1] != "harden-ssh" {
+		t.Errorf("add = %v, want [fail2ban harden-ssh]", applier.add)
+	}
+	if len(applier.remove) != 1 || applier.remove[0] != "firewall" {
+		t.Errorf("remove = %v, want [firewall]", applier.remove)
+	}
+	got, _ := store.Get("s1")
+	if len(got.Options) != 2 {
+		t.Errorf("persisted options = %v, want 2 entries", got.Options)
+	}
+}
+
+func TestApplyOptions_RequiresReady(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	_ = store.Save(Server{ID: "s1", Status: StatusProbed})
+	if err := svc.ApplyOptions(context.Background(), "s1", []string{"firewall"}, io.Discard); err == nil {
+		t.Fatal("expected error applying options to a non-ready server")
+	}
 }
 
 func TestAdd_StoresRootPasswordInVaultNotOnServer(t *testing.T) {
