@@ -17,12 +17,14 @@ const maxBodyBytes = 64 << 10
 // GitHubHandler serves the GitHub connection endpoints over the usecase layer.
 type GitHubHandler struct {
 	connector *usecase.GitHubConnector
+	tree      *usecase.TreeService
 	log       *slog.Logger
 }
 
-// NewGitHubHandler wires the handler to the connector and a logger.
-func NewGitHubHandler(connector *usecase.GitHubConnector, log *slog.Logger) *GitHubHandler {
-	return &GitHubHandler{connector: connector, log: log}
+// NewGitHubHandler wires the handler to the connector, the repo-tree service,
+// and a logger.
+func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, log *slog.Logger) *GitHubHandler {
+	return &GitHubHandler{connector: connector, tree: tree, log: log}
 }
 
 type exchangeRequest struct {
@@ -167,6 +169,30 @@ func (h *GitHubHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
 		})
 	}
 	h.writeJSON(w, nethttp.StatusOK, out)
+}
+
+// Tree lists every path in a repo at a ref so the configure UI can offer a
+// directory/file picker instead of a free-text path. owner, repo and ref are
+// all required. Not-connected is reported as 401.
+func (h *GitHubHandler) Tree(w nethttp.ResponseWriter, r *nethttp.Request) {
+	q := r.URL.Query()
+	owner, repo, ref := q.Get("owner"), q.Get("repo"), q.Get("ref")
+	if owner == "" || repo == "" || ref == "" {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner, repo or ref")
+		return
+	}
+
+	entries, err := h.tree.Tree(r.Context(), owner, repo, ref)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("list tree failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not list repository tree")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, entries)
 }
 
 // Disconnect removes the stored token from the keychain.

@@ -52,15 +52,19 @@ func run() error {
 		ghClient,
 		tokens,
 	)
-	githubHandler := httpadapter.NewGitHubHandler(connector, logger)
+	// Repo tree listing (directory/file picker) reads on the user's behalf with
+	// the same refreshing token.
+	treeSvc := usecase.NewTreeService(tokens, ghClient)
+	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, logger)
 
 	// Compose the server flow: SSH probe + bootstrap + key generation (all ssh),
 	// JSON-file persistence, and keychain secrets. One ssh.Client serves probe,
-	// bootstrap, and keygen.
+	// bootstrap, keygen, and port inspection.
 	sshClient := ssh.NewClient()
 	serverStore := repository.NewServerFile(filepath.Join(cfg.DataDir, "servers.json"))
 	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
-	serversHandler := httpadapter.NewServersHandler(serverSvc, logger)
+	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
 	// environment/secrets (all github), reading the server record (JSON store)

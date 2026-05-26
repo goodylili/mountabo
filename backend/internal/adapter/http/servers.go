@@ -14,15 +14,36 @@ import (
 	"github.com/goodylili/mountabo/internal/usecase"
 )
 
-// ServersHandler serves the add-server, list, and live-setup endpoints.
+// ServersHandler serves the add-server, list, live-setup, and port-check
+// endpoints.
 type ServersHandler struct {
-	svc *usecase.ServerService
-	log *slog.Logger
+	svc   *usecase.ServerService
+	ports *usecase.ServerPortService
+	log   *slog.Logger
 }
 
-// NewServersHandler wires the handler to the server service and a logger.
-func NewServersHandler(svc *usecase.ServerService, log *slog.Logger) *ServersHandler {
-	return &ServersHandler{svc: svc, log: log}
+// NewServersHandler wires the handler to the server service, the port-check
+// service, and a logger.
+func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, log *slog.Logger) *ServersHandler {
+	return &ServersHandler{svc: svc, ports: ports, log: log}
+}
+
+// Ports reports the ports already listening on a server so the configure UI can
+// flag a deploy port that would collide. The port stays editable; mountabo
+// never changes it.
+func (h *ServersHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	ports, err := h.ports.Listening(r.Context(), id)
+	if errors.Is(err, usecase.ErrServerNotFound) {
+		h.writeError(w, nethttp.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		h.log.Error("list server ports failed", "id", id, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not check server ports")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, map[string][]int{"listening": ports})
 }
 
 type addServerRequest struct {
