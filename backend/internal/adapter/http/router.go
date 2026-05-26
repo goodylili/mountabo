@@ -11,8 +11,9 @@ import nethttp "net/http"
 //	POST   /api/servers              add a server (probe specs over SSH)
 //	GET    /api/servers              list added servers
 //	GET    /api/servers/{id}/setup   run the bootstrap, streaming progress (SSE)
+//	POST   /api/servers/{id}/deploy  configure deployment of a repo, streaming (SSE)
 //	DELETE /api/servers/{id}         remove a server and destroy its secrets
-func NewRouter(gh *GitHubHandler, sv *ServersHandler) *nethttp.ServeMux {
+func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler) *nethttp.ServeMux {
 	mux := nethttp.NewServeMux()
 	mux.HandleFunc("POST /api/github/exchange", gh.Exchange)
 	mux.HandleFunc("GET /api/github/status", gh.Status)
@@ -24,6 +25,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler) *nethttp.ServeMux {
 	mux.HandleFunc("GET /api/servers/options", sv.Options)
 	mux.HandleFunc("GET /api/servers/{id}/setup", sv.Setup)
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
+	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)
 	mux.HandleFunc("DELETE /api/servers/{id}", sv.Delete)
 	return mux
 }

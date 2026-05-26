@@ -38,11 +38,17 @@ func run() error {
 	// listing (all github) + token persistence (keychain), driven by the
 	// connector. One github.Client serves both account and repo reads.
 	ghClient := github.NewClient()
+	// The OAuth adapter both exchanges codes and refreshes tokens; the token
+	// manager wraps the keychain store so every Load returns a still-valid token
+	// (GitHub App user tokens expire ~8h), keeping the user's OAuth credential
+	// usable for all GitHub requests, repos, deploy keys, secrets, and workflows.
+	oauth := github.NewOAuth(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret)
+	tokens := usecase.NewTokenManager(keyStore, oauth)
 	connector := usecase.NewGitHubConnector(
-		github.NewOAuth(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret),
+		oauth,
 		ghClient,
 		ghClient,
-		keyStore,
+		tokens,
 	)
 	githubHandler := httpadapter.NewGitHubHandler(connector, logger)
 
@@ -54,7 +60,14 @@ func run() error {
 	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
 	serversHandler := httpadapter.NewServersHandler(serverSvc, logger)
 
-	router := httpadapter.NewRouter(githubHandler, serversHandler)
+	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
+	// environment/secrets (all github), reading the server record (JSON store)
+	// and mountabo's stored key (keychain). One github.Client and keychain.Store
+	// already in hand serve these too.
+	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient)
+	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
+
+	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler)
 	srv := httpadapter.NewServer(cfg, router)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

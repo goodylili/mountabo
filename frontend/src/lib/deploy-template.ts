@@ -50,6 +50,9 @@ export type DeployConfig = {
   owner: string;
   repo: string;
   branch: string;
+  // GitHub deployment environment the workflow runs in (so environment secrets
+  // resolve). Defaults to the branch name.
+  environment?: string;
   rootDir: string;
   deployDir: string;
   ports: { frontend: string; backend: string; postgres: string; redis: string };
@@ -92,6 +95,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: ${cfg.environment ?? cfg.branch}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

@@ -87,7 +87,7 @@ func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 	if raw := r.URL.Query().Get("options"); raw != "" {
 		options = strings.Split(raw, ",")
 	}
-	h.stream(w, "server is ready", func(out io.Writer) error {
+	streamSSE(w, h.log, "server is ready", func(out io.Writer) error {
 		return h.svc.Setup(r.Context(), id, options, out)
 	})
 }
@@ -118,23 +118,26 @@ func (h *ServersHandler) ApplyOptions(w nethttp.ResponseWriter, r *nethttp.Reque
 		}
 		params[optID][pKey] = vals[0]
 	}
-	h.stream(w, "settings applied", func(out io.Writer) error {
+	streamSSE(w, h.log, "settings applied", func(out io.Writer) error {
 		return h.svc.ApplyOptions(r.Context(), id, desired, params, out)
 	})
 }
 
-// stream runs a long, output-producing operation and relays it as Server-Sent
+// streamSSE runs a long, output-producing operation and relays it as Server-Sent
 // Events: each output line is a `data:` event, ending with a terminal `done`
 // (with successMsg) or `error` event. The per-response write deadline is
-// cleared because these can run for many minutes.
-func (h *ServersHandler) stream(w nethttp.ResponseWriter, successMsg string, run func(io.Writer) error) {
+// cleared because these can run for many minutes. Shared by every streaming
+// handler (setup, apply-options, deploy).
+func streamSSE(w nethttp.ResponseWriter, log *slog.Logger, successMsg string, run func(io.Writer) error) {
 	flusher, ok := w.(nethttp.Flusher)
 	if !ok {
-		h.writeError(w, nethttp.StatusInternalServerError, "streaming unsupported")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(nethttp.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "streaming unsupported"})
 		return
 	}
 	if err := nethttp.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
-		h.log.Warn("clear write deadline", "err", err)
+		log.Warn("clear write deadline", "err", err)
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -153,10 +156,12 @@ func (h *ServersHandler) stream(w nethttp.ResponseWriter, successMsg string, run
 		sw.event("done", successMsg)
 	case errors.Is(err, usecase.ErrServerNotFound):
 		sw.event("error", "server not found")
+	case errors.Is(err, usecase.ErrNotConnected):
+		sw.event("error", "github not connected")
 	case errors.Is(err, usecase.ErrSetupInProgress):
 		sw.event("error", "another setup/apply is already running for this server")
 	default:
-		h.log.Error("stream operation failed", "err", err)
+		log.Error("stream operation failed", "err", err)
 		// Surface the (secret-free) reason, then the terminal error event.
 		sw.data("✗ " + strings.ReplaceAll(err.Error(), "\n", " "))
 		sw.event("error", "failed")
