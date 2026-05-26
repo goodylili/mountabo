@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
+import { RepoTreePicker } from "@/components/repo-tree-picker";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
 import type { Server, Source } from "@/lib/data";
 import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
@@ -137,7 +138,15 @@ export function ConfigureView({
         </Section>
 
         <Section label="root directory" hint="where docker-compose.yml lives">
-          <input value={rootDir} onChange={(e) => setRootDir(e.target.value)} className={inputCls} placeholder="./" />
+          <RepoTreePicker
+            mode="dir"
+            owner={source.owner}
+            repo={source.name}
+            gitRef={branch}
+            value={rootDir}
+            onChange={setRootDir}
+            placeholder="./"
+          />
         </Section>
 
         <Section label="deploy directory" hint="on the server">
