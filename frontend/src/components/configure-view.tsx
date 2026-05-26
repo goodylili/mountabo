@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { RepoTreePicker } from "@/components/repo-tree-picker";
+import { StreamLog } from "@/components/stream-log";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
 import type { Server, Source } from "@/lib/data";
 import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
 import { fetchListeningPorts } from "@/lib/server-ports";
-import { type DeployPreview, type PreviewPort, fetchPreview } from "@/lib/deploy-preview";
+import { type DeployPreview, type PreviewPort, type PreviewRequest, fetchPreview } from "@/lib/deploy-preview";
 import { type EnvVar, mergeEnv, parseEnvFile } from "@/lib/deploy-template";
 
 type Tab = "workflow" | "script" | "secrets";
@@ -115,8 +116,12 @@ export function ConfigureView({
   // request is debounced as the operator edits.
   const [preview, setPreview] = useState<DeployPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Snapshot of the config sent when the operator clicks deploy; while set, the
+  // live deploy stream is shown. Stable so the stream runs exactly once.
+  const [deployBody, setDeployBody] = useState<PreviewRequest | null>(null);
+  const [deployed, setDeployed] = useState(false);
 
-  const previewReq = useMemo(
+  const previewReq: PreviewRequest = useMemo(
     () => ({
       app: app.trim() || source.name,
       owner: source.owner,
@@ -342,22 +347,36 @@ export function ConfigureView({
           </div>
         </Section>
 
-        {/* CTA: this iteration generates the preview; GitHub writes land next. */}
+        {/* CTA: commit the workflow + deploy.sh and set the secrets, streamed live. */}
         <div className="mt-8">
           <button
-            disabled
-            className="flex w-full items-center justify-center gap-2 rounded-xl border border-line bg-surface-2 px-6 py-4 font-bold text-muted"
-            title="GitHub writes (deploy key, secrets, workflow) are the next step"
+            disabled={!preview}
+            onClick={() => setDeployBody(previewReq)}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-6 py-4 font-bold text-lime transition-colors hover:bg-lime/20 disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-2 disabled:text-muted"
+            title={preview ? "commit the workflow + deploy.sh and set the Actions secrets" : "waiting for a valid configuration"}
           >
-            deploy (writes land next)
+            {deployed ? "re-deploy configuration" : "deploy"}
           </button>
           <p className="mt-2 text-center text-[11px] text-muted">
-            preview is live on the right. the next pass adds the deploy key, sets {preview?.secrets.length ?? 0} secrets,
-            and commits these files.
+            commits these files and sets {preview?.secrets.length ?? 0} secrets on {source.owner}/{source.name}. push to{" "}
+            {branch} afterwards to ship.
           </p>
           {previewError && <p className="mt-2 text-center text-[11px] text-red-300">{previewError}</p>}
         </div>
       </div>
+
+      {deployBody && (
+        <StreamLog
+          title={`deploying ${app.trim() || source.name}`}
+          subtitle={`${source.owner}/${source.name} → ${server.name}`}
+          url={`/api/servers/${server.id}/deploy`}
+          body={deployBody}
+          onClose={() => setDeployBody(null)}
+          onDone={(ok) => {
+            if (ok) setDeployed(true);
+          }}
+        />
+      )}
 
       {/* ── right: live preview ── */}
       <div className="rise flex flex-col" style={{ animationDelay: "80ms" }}>
