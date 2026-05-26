@@ -119,7 +119,7 @@ func annotateDocker(ctx context.Context, api *gogithub.Client, repos []usecase.R
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(8) // bound concurrent GitHub calls
 	for i := range repos {
-		i := i // distinct slice index per goroutine; no shared write
+		// each goroutine writes only its own slice element, so no element is shared
 		g.Go(func() error {
 			repos[i].HasDocker = hasDockerRoot(gctx, api, repos[i])
 			return nil // best-effort: never abort the group on one repo
