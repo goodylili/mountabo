@@ -39,6 +39,14 @@ func (f *fakeSecretSetter) SetEnvSecrets(_ context.Context, _ Token, _, _, envir
 	return f.err
 }
 
+type fakeDeploymentStore struct{ saved []Deployment }
+
+func (f *fakeDeploymentStore) List() ([]Deployment, error) { return f.saved, nil }
+func (f *fakeDeploymentStore) Save(d Deployment) error {
+	f.saved = append(f.saved, d)
+	return nil
+}
+
 type fakeTokenStore struct {
 	token Token
 	err   error
@@ -54,7 +62,7 @@ func readyDeployFixture(t *testing.T) (*memServerStore, *fakeVault, *fakeRepoWri
 	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
 	repo, envs, secrets := &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets)
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets, &fakeDeploymentStore{})
 	return store, vault, repo, envs, secrets, svc
 }
 
@@ -140,7 +148,7 @@ func TestDeploy_EnvironmentOverridesBranch(t *testing.T) {
 func TestDeploy_RequiresReadyServer(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusProbed})
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{})
 
 	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err == nil {
 		t.Fatal("expected an error deploying to a server that is not ready")
@@ -164,7 +172,7 @@ func TestDeploy_NotConnected(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
-	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{})
+	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{})
 
 	err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder))
 	if err == nil {

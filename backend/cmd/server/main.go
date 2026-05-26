@@ -70,10 +70,16 @@ func run() error {
 	// environment/secrets (all github), reading the server record (JSON store)
 	// and mountabo's stored key (keychain). One github.Client and keychain.Store
 	// already in hand serve these too.
-	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient)
+	deploymentStore := repository.NewDeploymentFile(filepath.Join(cfg.DataDir, "deployments.json"))
+	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient, deploymentStore)
 	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
 
-	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler)
+	// Compose the monitor: configured deployments (JSON store) enriched with
+	// their GitHub Actions runs (github), read with the refreshing token.
+	monitorSvc := usecase.NewMonitorService(deploymentStore, tokens, ghClient)
+	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
+
+	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler)
 	srv := httpadapter.NewServer(cfg, router)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

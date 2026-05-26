@@ -6,6 +6,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/goodylili/mountabo/internal/workflow"
 )
@@ -106,11 +107,12 @@ type DeployService struct {
 	repo    RepoWriter
 	envs    EnvManager
 	secrets EnvSecretSetter
+	history DeploymentStore
 }
 
 // NewDeployService wires the service to its ports.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets}
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -191,6 +193,23 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 	progress(out, "setting %d secrets on environment %s", len(secrets), env)
 	if err := s.secrets.SetEnvSecrets(ctx, token, in.Owner, in.Repo, env, secrets); err != nil {
 		return fmt.Errorf("set environment secrets: %w", err)
+	}
+
+	// Record the deployment so the monitor can show its history. A failure here
+	// must not fail the deploy, which already succeeded, so it is only noted.
+	record := Deployment{
+		ID:           newID(),
+		App:          cfg.App,
+		Owner:        in.Owner,
+		Repo:         in.Repo,
+		Branch:       in.Branch,
+		Environment:  env,
+		ServerID:     in.ServerID,
+		WorkflowFile: fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch),
+		CreatedAt:    time.Now().UTC(),
+	}
+	if err := s.history.Save(record); err != nil {
+		progress(out, "note: deploy succeeded but recording history failed: %v", err)
 	}
 
 	progress(out, "deploy configured, push to %s to trigger a %s deploy", in.Branch, cfg.Strategy)

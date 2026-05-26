@@ -16,8 +16,9 @@ import nethttp "net/http"
 //	GET    /api/servers/{id}/ports   list ports already listening on the server
 //	POST   /api/deploy/preview       generate the workflow + deploy.sh + secrets (no side effects)
 //	POST   /api/servers/{id}/deploy  configure deployment of a repo, streaming (SSE)
+//	GET    /api/deployments          deploy history (configured deployments + their Actions runs)
 //	DELETE /api/servers/{id}         remove a server and destroy its secrets
-func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler) *nethttp.ServeMux {
+func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *MonitorHandler) *nethttp.ServeMux {
 	mux := nethttp.NewServeMux()
 	mux.HandleFunc("POST /api/github/exchange", gh.Exchange)
 	mux.HandleFunc("GET /api/github/status", gh.Status)
@@ -34,6 +35,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler) *netht
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
 	mux.HandleFunc("POST /api/deploy/preview", dep.Preview)
 	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)
+	mux.HandleFunc("GET /api/deployments", mon.Deployments)
 	mux.HandleFunc("DELETE /api/servers/{id}", sv.Delete)
 	return mux
 }

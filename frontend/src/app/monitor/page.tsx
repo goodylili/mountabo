@@ -1,11 +1,15 @@
 import { Header } from "@/components/header";
 import { MonitorView } from "@/components/monitor-view";
-import { deployments, servers } from "@/lib/data";
+import { getDeployments } from "@/lib/deployments";
+import { getServers, toDisplayServer } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function MonitorPage() {
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
+
+  const [deployments, serverViews] = await Promise.all([getDeployments(), getServers()]);
+  const servers = serverViews.map(toDisplayServer);
 
   const now = new Date();
   const stamp = now.toLocaleTimeString("en-GB", {
