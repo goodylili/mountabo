@@ -24,45 +24,43 @@
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
-/* dark (default) — tuned for WCAG AA on #000:
-   cream ~18:1, body ~11:1, muted ~6:1, faint ~3.6:1 */
+/* dark (default) — Vercel / Geist palette. Green accent retained. */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #000000;
-  --surface: #0c0c0e;
-  --surface-2: #131316;
-  --surface-hover: #1a1a1e;
-  --line: rgba(238, 232, 218, 0.1);
-  --line-strong: rgba(238, 232, 218, 0.2);
-  --cream: #f2efe6; /* primary text, near-white */
-  --body: #c2bcae; /* secondary */
-  --muted: #918b7e; /* tertiary, still AA */
-  --faint: #6a655b; /* de-emphasized labels / dividers */
-  --lime: #b6f04a; /* text / border / tint */
+  --bg: #000000; /* geist background */
+  --surface: #0a0a0a;
+  --surface-2: #111111;
+  --surface-hover: #1a1a1a;
+  --line: #2e2e2e; /* geist border */
+  --line-strong: #444444;
+  --cream: #ededed; /* geist foreground */
+  --body: #a1a1a1; /* gray-900 */
+  --muted: #888888; /* gray-700 */
+  --faint: #666666; /* gray-600 */
+  --lime: #b6f04a; /* retained green: text / border / tint */
   --lime-dim: #84cc16;
   --lime-fill: #b6f04a; /* solid fills, black text legible */
-  --blue: #5aa3f8;
+  --blue: #3291ff; /* geist blue (dark) */
 }
 
-/* light — brighter paper, darker text. Tuned for WCAG AA on #fbfaf6:
-   cream ~17:1, body ~9:1, muted ~5.4:1, faint ~3:1 */
+/* light — Vercel / Geist palette. Green accent retained. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fbfaf6;
+  --bg: #ffffff; /* geist background */
   --surface: #ffffff;
-  --surface-2: #f1efe7;
-  --surface-hover: #e9e6da;
-  --line: rgba(34, 30, 22, 0.14);
-  --line-strong: rgba(34, 30, 22, 0.24);
-  --cream: #15130d; /* primary text, near-black */
-  --body: #4a4639; /* secondary */
-  --muted: #6e695c; /* tertiary, AA */
-  --faint: #908a7b; /* de-emphasized labels / dividers */
-  --lime: #4d7c0f; /* readable on paper */
+  --surface-2: #fafafa;
+  --surface-hover: #f2f2f2;
+  --line: #eaeaea; /* geist border */
+  --line-strong: #999999;
+  --cream: #000000; /* geist foreground */
+  --body: #666666; /* gray-700 */
+  --muted: #888888; /* gray-600 */
+  --faint: #999999; /* gray-500 */
+  --lime: #4d7c0f; /* retained green: readable on white */
   --lime-dim: #3f6b0a;
-  --lime-fill: #9bd42c; /* bright fill, black text legible */
-  --blue: #2f7fd6;
+  --lime-fill: #9bd42c; /* bright green fill, black text legible */
+  --blue: #0070f3; /* vercel blue */
 }
 
 html {
