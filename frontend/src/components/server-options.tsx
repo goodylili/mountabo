@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ChevronDown } from "@/components/icons";
 import type { OptionParam, ServerView, SetupOption } from "@/lib/servers";
 
 const CATEGORY_ORDER = ["Network", "SSH", "TLS", "Monitoring", "System", "Audit"];
@@ -22,7 +23,6 @@ export function ServerOptions({
   const current = new Set(server.options ?? []);
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [paramValues, setParamValues] = useState<Record<string, Record<string, string>>>({});
-  const [activeCat, setActiveCat] = useState<string | null>(null);
 
   const isOn = (id: string) => pending[id] ?? current.has(id);
   const paramVal = (id: string, p: OptionParam) => paramValues[id]?.[p.key] ?? p.default ?? "";
@@ -31,8 +31,13 @@ export function ServerOptions({
 
   const categories = CATEGORY_ORDER.filter((c) => catalog.some((o) => o.category === c));
   for (const o of catalog) if (!categories.includes(o.category)) categories.push(o.category);
-  const active = activeCat && categories.includes(activeCat) ? activeCat : categories[0] ?? "";
-  const items = catalog.filter((o) => o.category === active);
+
+  // Each category is an independently collapsible section; the first opens by
+  // default so the panel is never just a wall of closed headers.
+  const [openCats, setOpenCats] = useState<Record<string, boolean>>(() =>
+    categories[0] ? { [categories[0]]: true } : {},
+  );
+  const toggleCat = (c: string) => setOpenCats((s) => ({ ...s, [c]: !s[c] }));
 
   const changed = catalog.filter((o) => isOn(o.id) !== current.has(o.id)).length;
   // A ticked option with required params left blank can't be applied.
@@ -72,72 +77,86 @@ export function ServerOptions({
   }
 
   return (
-    <div className="border-t border-line px-4 py-4">
-      <p className="text-[12px] text-muted">
-        hardening settings — tick to add, untick to remove. changes are applied over SSH (as
+    <div className="border-t border-line px-4 py-5">
+      <p className="text-[13px] leading-6 text-body">
+        hardening settings: tick to add, untick to remove. changes are applied over SSH (as
         mountabo, with sudo) only after you confirm.
       </p>
 
-      <div className="mt-3 flex flex-wrap gap-1">
+      <div className="mt-4 space-y-2">
         {categories.map((c) => {
-          const onCount = catalog.filter((o) => o.category === c && isOn(o.id)).length;
+          const open = openCats[c] ?? false;
+          const catItems = catalog.filter((o) => o.category === c);
+          const onCount = catItems.filter((o) => isOn(o.id)).length;
           return (
-            <button
-              key={c}
-              onClick={() => setActiveCat(c)}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] transition-colors ${
-                c === active ? "bg-surface text-cream" : "text-muted hover:text-cream"
-              }`}
-            >
-              {c.toLowerCase()}
-              {onCount > 0 && (
-                <span className="rounded bg-lime/15 px-1.5 text-[10px] text-lime">{onCount}</span>
+            <div key={c} className="overflow-hidden rounded-lg border border-line bg-surface">
+              <button
+                onClick={() => toggleCat(c)}
+                aria-expanded={open}
+                className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-surface-hover"
+              >
+                <span className="flex items-center gap-2.5">
+                  <ChevronDown
+                    className={`text-faint transition-transform ${open ? "" : "-rotate-90"}`}
+                  />
+                  <span className="text-[14px] font-medium text-cream">{c.toLowerCase()}</span>
+                  <span className="text-[12px] text-faint">
+                    {catItems.length} option{catItems.length === 1 ? "" : "s"}
+                  </span>
+                </span>
+                {onCount > 0 && (
+                  <span className="rounded bg-lime/15 px-2 py-0.5 text-[12px] font-medium text-lime">
+                    {onCount} on
+                  </span>
+                )}
+              </button>
+
+              {open && (
+                <ul className="space-y-2 border-t border-line p-3">
+                  {catItems.map((o) => (
+                    <li key={o.id} className="rounded-lg border border-line bg-surface-2 p-3.5">
+                      <label className="flex cursor-pointer gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isOn(o.id)}
+                          onChange={(e) => setPending((s) => ({ ...s, [o.id]: e.target.checked }))}
+                          className="mt-0.5 h-4 w-4 accent-lime"
+                        />
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-2 text-[14px] font-medium text-cream">
+                            {o.name}
+                            {current.has(o.id) && <span className="text-[12px] text-blue">applied</span>}
+                          </span>
+                          <span className="mt-1 block text-[13px] leading-6 text-body">{o.description}</span>
+                        </span>
+                      </label>
+
+                      {/* inline params, shown when ticked */}
+                      {isOn(o.id) && o.params && o.params.length > 0 && (
+                        <div className="mt-3 grid grid-cols-2 gap-2 pl-7">
+                          {o.params.map((p) => (
+                            <label key={p.key} className="block">
+                              <span className="mb-1 block text-[12px] text-muted">{p.label}</span>
+                              <input
+                                value={paramVal(o.id, p)}
+                                onChange={(e) => setParam(o.id, p.key, e.target.value)}
+                                placeholder={p.placeholder}
+                                className={`w-full rounded-md border bg-surface px-2.5 py-2 text-[13px] text-cream placeholder:text-muted focus:outline-none ${
+                                  paramVal(o.id, p).trim() ? "border-line focus:border-line-strong" : "border-red-500/40"
+                                }`}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
               )}
-            </button>
+            </div>
           );
         })}
       </div>
-
-      <ul className="mt-3 space-y-2">
-        {items.map((o) => (
-          <li key={o.id} className="rounded-lg border border-line bg-surface p-3">
-            <label className="flex cursor-pointer gap-3">
-              <input
-                type="checkbox"
-                checked={isOn(o.id)}
-                onChange={(e) => setPending((s) => ({ ...s, [o.id]: e.target.checked }))}
-                className="mt-0.5 h-4 w-4 accent-lime"
-              />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-[13px] font-medium text-cream">
-                  {o.name}
-                  {current.has(o.id) && <span className="text-[10px] text-blue">applied</span>}
-                </span>
-                <span className="mt-1 block text-[12px] leading-5 text-muted">{o.description}</span>
-              </span>
-            </label>
-
-            {/* inline params, shown when ticked */}
-            {isOn(o.id) && o.params && o.params.length > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-2 pl-7">
-                {o.params.map((p) => (
-                  <label key={p.key} className="block">
-                    <span className="mb-1 block text-[11px] text-muted">{p.label}</span>
-                    <input
-                      value={paramVal(o.id, p)}
-                      onChange={(e) => setParam(o.id, p.key, e.target.value)}
-                      placeholder={p.placeholder}
-                      className={`w-full rounded-md border bg-surface-2 px-2.5 py-1.5 text-[12px] text-cream placeholder:text-muted focus:outline-none ${
-                        paramVal(o.id, p).trim() ? "border-line focus:border-line-strong" : "border-red-500/40"
-                      }`}
-                    />
-                  </label>
-                ))}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
 
       <button
         onClick={apply}
@@ -194,7 +213,7 @@ function ChangeHistory({
                 ))}
                 {(ev.removed ?? []).map((id) => (
                   <span key={id} className="text-muted">
-                    −{nameOf(id)}{" "}
+                    -{nameOf(id)}{" "}
                   </span>
                 ))}
               </span>

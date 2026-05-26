@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import {
   ArrowRight,
   Branch,
+  Docker,
   GithubMark,
   Lock,
   Plus,
@@ -18,6 +19,7 @@ import {
 import { AddServerForm } from "@/components/add-server-form";
 import { OwnerDropdown } from "@/components/owner-dropdown";
 import { ServerOptions } from "@/components/server-options";
+import { ServerSelect } from "@/components/server-select";
 import { StreamLog } from "@/components/stream-log";
 import type { Source } from "@/lib/data";
 import type { ServerStatus, ServerView, SetupOption } from "@/lib/servers";
@@ -41,6 +43,7 @@ export function NewDeployment({
   stamp: string;
 }) {
   const router = useRouter();
+  const [refreshing, startRefresh] = useTransition();
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<string | null>(null);
@@ -176,7 +179,7 @@ export function NewDeployment({
         </label>
       </div>
 
-      {/* view tabs — repositories / servers, each full-width */}
+      {/* view tabs: repositories / servers, each full-width */}
       <div className="rise mt-6 flex items-center gap-1" style={{ animationDelay: "120ms" }}>
         <ViewTab active={view === "repos"} onClick={() => setView("repos")} count={filteredSources.length}>
           repositories
@@ -197,8 +200,12 @@ export function NewDeployment({
                 {String(filteredSources.length).padStart(2, "0")}
               </span>
             </span>
-            <button className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream">
-              <Refresh /> refresh
+            <button
+              onClick={() => startRefresh(() => router.refresh())}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream disabled:opacity-60"
+            >
+              <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
             </button>
           </div>
 
@@ -242,6 +249,11 @@ export function NewDeployment({
                     >
                       {s.name}
                       {s.private && <Lock className="text-muted" />}
+                      {s.hasDocker && (
+                        <span title="has a Dockerfile or Compose file">
+                          <Docker className="text-[#2496ED]" />
+                        </span>
+                      )}
                     </a>
                     <span className="mt-1 flex items-center gap-2 text-[12px] text-muted">
                       <Branch className={s.branchAccent ? "text-lime" : "text-muted"} />
@@ -412,20 +424,7 @@ export function NewDeployment({
             {source}
           </span>
           <div className="flex items-center gap-3">
-            <select
-              value={server ?? ""}
-              onChange={(e) => setServer(e.target.value || null)}
-              className="rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-cream focus:border-line-strong focus:outline-none"
-            >
-              <option value="">
-                {readyServers.length ? "select a server…" : "no ready servers — set one up first"}
-              </option>
-              {readyServers.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} · {s.ip}
-                </option>
-              ))}
-            </select>
+            <ServerSelect servers={readyServers} value={server} onChange={setServer} />
             <Link
               href={configureHref}
               aria-disabled={!ready}

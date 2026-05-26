@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 	gogithub "github.com/google/go-github/v88/github"
@@ -42,7 +43,7 @@ func (c *Client) Account(ctx context.Context, t usecase.Token) (usecase.Account,
 // List returns every repository the token can access. Visibility "all" includes
 // private repos; the default affiliation covers owned, collaborator, and org
 // repositories. It fetches page 1 to learn the page count, then fetches the rest
-// concurrently (bounded) rather than walking NextPage one round-trip at a time —
+// concurrently (bounded) rather than walking NextPage one round-trip at a time,
 // for accounts with hundreds of repos this turns ~7s of serial calls into ~1.
 func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, error) {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
@@ -72,7 +73,7 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 		for p := 2; p <= resp.LastPage; p++ {
 			pageOpt := opt // copy; each goroutine gets its own page number
 			pageOpt.Page = p
-			idx := p - 1 // distinct slice index per goroutine — no shared write
+			idx := p - 1 // distinct slice index per goroutine, no shared write
 			g.Go(func() error {
 				repos, _, err := api.Repositories.ListByAuthenticatedUser(gctx, &pageOpt)
 				if err != nil {
@@ -93,7 +94,56 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 			repos = append(repos, toRepo(r))
 		}
 	}
+
+	annotateDocker(ctx, api, repos)
 	return repos, nil
+}
+
+// dockerRootNames are the root-level filenames that mark a repo as ready to
+// containerize. Matched case-insensitively; any "Dockerfile*" variant counts.
+var dockerRootNames = map[string]bool{
+	"dockerfile":          true,
+	"docker-compose.yml":  true,
+	"docker-compose.yaml": true,
+	"compose.yml":         true,
+	"compose.yaml":        true,
+}
+
+// annotateDocker sets HasDocker on each repo by inspecting its root directory.
+// It fans the per-repo lookups out with bounded concurrency (one GitHub call
+// per repo) and writes only to its own slice element, so no element is shared
+// between goroutines. A failed lookup (empty repo, missing branch, transient
+// error) leaves HasDocker false rather than failing the whole listing, so the
+// docker flag is best-effort and never blocks the repo list.
+func annotateDocker(ctx context.Context, api *gogithub.Client, repos []usecase.Repo) {
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8) // bound concurrent GitHub calls
+	for i := range repos {
+		i := i // distinct slice index per goroutine; no shared write
+		g.Go(func() error {
+			repos[i].HasDocker = hasDockerRoot(gctx, api, repos[i])
+			return nil // best-effort: never abort the group on one repo
+		})
+	}
+	_ = g.Wait()
+}
+
+// hasDockerRoot reports whether the repo's root directory contains a Dockerfile
+// or a Compose file. It reads the root listing in a single call against the
+// default branch; errors (including a 404 on an empty repo) report false.
+func hasDockerRoot(ctx context.Context, api *gogithub.Client, r usecase.Repo) bool {
+	opt := &gogithub.RepositoryContentGetOptions{Ref: r.DefaultBranch}
+	_, dir, _, err := api.Repositories.GetContents(ctx, r.Owner, r.Name, "", opt)
+	if err != nil {
+		return false
+	}
+	for _, entry := range dir {
+		name := strings.ToLower(entry.GetName())
+		if dockerRootNames[name] || strings.HasPrefix(name, "dockerfile") {
+			return true
+		}
+	}
+	return false
 }
 
 func toRepo(r *gogithub.Repository) usecase.Repo {

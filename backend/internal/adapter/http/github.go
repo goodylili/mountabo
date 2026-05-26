@@ -47,6 +47,7 @@ type repoResponse struct {
 	DefaultBranch string `json:"defaultBranch"`
 	Language      string `json:"language"`
 	PushedAt      string `json:"pushedAt"`
+	HasDocker     bool   `json:"hasDocker"`
 }
 
 // Exchange completes the OAuth web flow: it takes the authorization code the
@@ -117,6 +118,7 @@ func (h *GitHubHandler) Repos(w nethttp.ResponseWriter, r *nethttp.Request) {
 			DefaultBranch: rp.DefaultBranch,
 			Language:      rp.Language,
 			PushedAt:      pushed,
+			HasDocker:     rp.HasDocker,
 		})
 	}
 	h.writeJSON(w, nethttp.StatusOK, out)

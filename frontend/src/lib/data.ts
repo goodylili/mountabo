@@ -1,7 +1,7 @@
 // Shared shapes for the local UI. Repositories come from the Go backend (GitHub
 // API) via lib/repos. Servers and deployments will come from the backend
 // (SQLite + GitHub Actions runs) once those flows exist; until then they are
-// empty — the UI shows real state only, never fabricated data.
+// empty, the UI shows real state only, never fabricated data.
 
 export type Source = {
   owner: string;
@@ -12,6 +12,7 @@ export type Source = {
   language: string;
   loc?: string;
   private?: boolean;
+  hasDocker?: boolean;
 };
 
 export type ServerStatus = "healthy" | "idle";
@@ -63,7 +64,7 @@ export type Deployment = {
   runs: DeployRun[];
 };
 
-// What's currently running where — assembled from GitHub Actions run history +
+// What's currently running where, assembled from GitHub Actions run history +
 // on-demand server pings. Empty until that backend flow exists.
 export const deployments: Deployment[] = [];
 

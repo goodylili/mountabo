@@ -1,7 +1,7 @@
 // Package usecase holds mountabo's application logic and the ports it depends
 // on. It owns the interfaces it consumes; adapters in internal/github and
 // internal/keychain satisfy them. No HTTP, OAuth, or GitHub library types leak
-// across this boundary — only the domain types defined here.
+// across this boundary, only the domain types defined here.
 package usecase
 
 import (
@@ -44,6 +44,9 @@ type Repo struct {
 	DefaultBranch string
 	Language      string
 	PushedAt      time.Time
+	// HasDocker is true when the repo's root holds a Dockerfile or a Compose
+	// file, so the UI can flag repos that are ready to containerize.
+	HasDocker bool
 }
 
 // CodeExchanger turns a completed OAuth web-flow authorization code into a
@@ -57,7 +60,7 @@ type AccountFetcher interface {
 	Account(ctx context.Context, t Token) (Account, error)
 }
 
-// RepoLister lists every repository a token can access — public and private,
+// RepoLister lists every repository a token can access, public and private,
 // owned, collaborator, and organization.
 type RepoLister interface {
 	List(ctx context.Context, t Token) ([]Repo, error)
