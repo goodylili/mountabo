@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import {
@@ -46,6 +46,7 @@ export function NewDeployment({
   const [source, setSource] = useState<string | null>(null);
   const [server, setServer] = useState<string | null>(null);
   const [serverList, setServerList] = useState<ServerView[]>(servers);
+  const [view, setView] = useState<"repos" | "servers">("repos");
   const [showAddServer, setShowAddServer] = useState(false);
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
   const [page, setPage] = useState(0);
@@ -153,9 +154,19 @@ export function NewDeployment({
         </label>
       </div>
 
-      {/* two columns */}
-      <div className="rise mt-6 grid flex-1 grid-cols-1 gap-x-16 gap-y-5 lg:grid-cols-[1.55fr_1fr]" style={{ animationDelay: "140ms" }}>
-        {/* sources */}
+      {/* view tabs — repositories / servers, each full-width */}
+      <div className="rise mt-6 flex items-center gap-1" style={{ animationDelay: "120ms" }}>
+        <ViewTab active={view === "repos"} onClick={() => setView("repos")} count={filteredSources.length}>
+          repositories
+        </ViewTab>
+        <ViewTab active={view === "servers"} onClick={() => setView("servers")} count={serverList.length}>
+          servers
+        </ViewTab>
+      </div>
+
+      {/* active view */}
+      <div className="rise mt-4 flex flex-1 flex-col" style={{ animationDelay: "140ms" }}>
+        {view === "repos" && (
         <section className="flex flex-col rounded-xl border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <span className="flex items-center gap-2">
@@ -259,8 +270,9 @@ export function NewDeployment({
             </div>
           )}
         </section>
+        )}
 
-        {/* servers */}
+        {view === "servers" && (
         <section className="flex flex-col rounded-xl border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-5 py-4">
             <span className="flex items-center gap-2">
@@ -342,6 +354,7 @@ export function NewDeployment({
             </li>
           </ul>
         </section>
+        )}
       </div>
 
       {/* continue affordance */}
@@ -403,5 +416,31 @@ export function NewDeployment({
       />
     )}
     </>
+  );
+}
+
+function ViewTab({
+  active,
+  onClick,
+  count,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  count: number;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] transition-colors ${
+        active ? "bg-surface-2 text-cream" : "text-muted hover:text-cream"
+      }`}
+    >
+      {children}
+      <span className="rounded border border-line px-1.5 py-0.5 text-[11px] text-muted">
+        {String(count).padStart(2, "0")}
+      </span>
+    </button>
   );
 }
