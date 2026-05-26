@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { ConfigureView } from "@/components/configure-view";
-import { deployKey, secretRows, workflowYaml } from "@/lib/preview";
 import { getRepos } from "@/lib/repos";
 import { getServers, toDisplayServer } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
@@ -42,15 +41,7 @@ export default async function ConfigurePage({
         back
         container="max-w-[1400px]"
       />
-      <ConfigureView
-        source={source}
-        server={server}
-        branch={branch}
-        account={account}
-        yaml={workflowYaml(source, server, branch)}
-        secrets={secretRows(server)}
-        deployKey={deployKey}
-      />
+      <ConfigureView source={source} server={server} branch={branch} account={account} />
     </div>
   );
 }
