@@ -7,8 +7,11 @@ import { getGithubConnection } from "@/lib/session";
 export default async function Home() {
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
-  const sources = account ? await getRepos() : [];
-  const servers = await getServers();
+  // Fetch repos (slow — GitHub API) and servers concurrently, not in series.
+  const [sources, servers] = await Promise.all([
+    account ? getRepos() : Promise.resolve([]),
+    getServers(),
+  ]);
 
   const now = new Date();
   const stamp = `${now
