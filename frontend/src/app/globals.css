@@ -24,39 +24,41 @@
   --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
-/* dark (default) */
+/* dark (default) — tuned for WCAG AA on #000:
+   cream ~18:1, body ~11:1, muted ~6:1, faint ~3.6:1 */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #000000;
-  --surface: #0b0b0c;
-  --surface-2: #101012;
-  --surface-hover: #151517;
-  --line: rgba(238, 232, 218, 0.08);
-  --line-strong: rgba(238, 232, 218, 0.16);
-  --cream: #ece7d9;
-  --body: #a7a195;
-  --muted: #6f6a60;
-  --faint: #45413a;
+  --surface: #0c0c0e;
+  --surface-2: #131316;
+  --surface-hover: #1a1a1e;
+  --line: rgba(238, 232, 218, 0.1);
+  --line-strong: rgba(238, 232, 218, 0.2);
+  --cream: #f2efe6; /* primary text, near-white */
+  --body: #c2bcae; /* secondary */
+  --muted: #918b7e; /* tertiary, still AA */
+  --faint: #6a655b; /* de-emphasized labels / dividers */
   --lime: #b6f04a; /* text / border / tint */
   --lime-dim: #84cc16;
   --lime-fill: #b6f04a; /* solid fills, black text legible */
-  --blue: #4f9df5;
+  --blue: #5aa3f8;
 }
 
-/* light */
+/* light — brighter paper, darker text. Tuned for WCAG AA on #fbfaf6:
+   cream ~17:1, body ~9:1, muted ~5.4:1, faint ~3:1 */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f4f1e8;
-  --surface: #fcfaf4;
-  --surface-2: #efece1;
-  --surface-hover: #e9e5d7;
-  --line: rgba(34, 30, 22, 0.12);
-  --line-strong: rgba(34, 30, 22, 0.22);
-  --cream: #1c1a14; /* primary text */
-  --body: #514c40;
-  --muted: #847e71;
-  --faint: #b3ac9c;
+  --bg: #fbfaf6;
+  --surface: #ffffff;
+  --surface-2: #f1efe7;
+  --surface-hover: #e9e6da;
+  --line: rgba(34, 30, 22, 0.14);
+  --line-strong: rgba(34, 30, 22, 0.24);
+  --cream: #15130d; /* primary text, near-black */
+  --body: #4a4639; /* secondary */
+  --muted: #6e695c; /* tertiary, AA */
+  --faint: #908a7b; /* de-emphasized labels / dividers */
   --lime: #4d7c0f; /* readable on paper */
   --lime-dim: #3f6b0a;
   --lime-fill: #9bd42c; /* bright fill, black text legible */
