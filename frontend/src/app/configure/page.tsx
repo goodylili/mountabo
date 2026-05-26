@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { ConfigureView } from "@/components/configure-view";
-import { findServer } from "@/lib/data";
 import { deployKey, secretRows, workflowYaml } from "@/lib/preview";
 import { getRepos } from "@/lib/repos";
+import { getServers, toDisplayServer } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function ConfigurePage({
@@ -15,20 +15,21 @@ export default async function ConfigurePage({
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
 
-  // Configuring requires a connected account, a chosen repo, and a real server.
-  // Until the server-add flow exists there are no servers, so this redirects
-  // home rather than rendering a screen built on data that doesn't exist.
-  const server = findServer(serverId);
-  if (!account || !repo || !server) {
-    redirect("/");
-  }
+  // The deployment page needs a connected account, a real repo, and a real
+  // (set-up) server. Resolve repos + servers concurrently; bail home if any of
+  // the three can't be resolved.
+  const [sources, servers] = await Promise.all([
+    account ? getRepos() : Promise.resolve([]),
+    getServers(),
+  ]);
 
-  const sources = await getRepos();
   const source = sources.find((s) => `${s.owner}/${s.name}` === repo);
-  if (!source) {
+  const real = servers.find((s) => s.id === serverId);
+  if (!account || !source || !real) {
     redirect("/");
   }
 
+  const server = toDisplayServer(real);
   const branch = source.branch;
 
   return (

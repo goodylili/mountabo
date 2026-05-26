@@ -34,6 +34,29 @@ export type SetupOption = {
   description: string;
 };
 
+// Maps a real ServerView to the display Server shape the configure/deploy views
+// expect, filling fields the backend doesn't track yet with sensible stand-ins.
+export function toDisplayServer(s: ServerView): import("@/lib/data").Server {
+  return {
+    id: s.id,
+    name: s.name,
+    initial: (s.name[0] ?? "?").toUpperCase(),
+    provider: "vps",
+    plan: s.specs.arch || "—",
+    ip: s.ip,
+    region: s.timezone || "—",
+    status: s.status === "ready" ? "healthy" : "idle",
+    uptimeLabel: s.status,
+    specs: {
+      cpu: s.specs.cpuCores ? `${s.specs.cpuCores} vcpu` : "—",
+      ram: s.specs.memoryMB ? `${Math.round(s.specs.memoryMB / 1024)} gb` : "—",
+      os: s.specs.os || "—",
+      ping: "—",
+      sshPort: s.sshPort,
+    },
+  };
+}
+
 export function backendURL(): string {
   return process.env.MOUNTABO_BACKEND ?? "http://localhost:7778";
 }

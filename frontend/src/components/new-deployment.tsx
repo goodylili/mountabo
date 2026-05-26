@@ -8,7 +8,6 @@ import { ServerAvatar } from "@/components/server-avatar";
 import {
   ArrowRight,
   Branch,
-  ChevronDown,
   GithubMark,
   Lock,
   Plus,
@@ -17,6 +16,7 @@ import {
   Shield,
 } from "@/components/icons";
 import { AddServerForm } from "@/components/add-server-form";
+import { OwnerDropdown } from "@/components/owner-dropdown";
 import { ServerOptions } from "@/components/server-options";
 import { StreamLog } from "@/components/stream-log";
 import type { Source } from "@/lib/data";
@@ -47,6 +47,7 @@ export function NewDeployment({
   const [server, setServer] = useState<string | null>(null);
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const [view, setView] = useState<"repos" | "servers">("repos");
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
   const [showAddServer, setShowAddServer] = useState(false);
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
   const [page, setPage] = useState(0);
@@ -91,10 +92,14 @@ export function NewDeployment({
   }, [source, server, router]);
 
   const q = query.trim().toLowerCase();
-  const filteredSources = useMemo(
-    () => (q ? sources.filter((s) => `${s.name} ${s.language}`.toLowerCase().includes(q)) : sources),
-    [sources, q],
-  );
+  // Distinct repo owners (account + organizations) for the owner dropdown.
+  const owners = useMemo(() => Array.from(new Set(sources.map((s) => s.owner))).sort(), [sources]);
+  const filteredSources = useMemo(() => {
+    let list = sources;
+    if (ownerFilter) list = list.filter((s) => s.owner === ownerFilter);
+    if (q) list = list.filter((s) => `${s.name} ${s.language}`.toLowerCase().includes(q));
+    return list;
+  }, [sources, q, ownerFilter]);
   // Repo lists can be large (hundreds), so paginate the sources client-side.
   // The page resets to 0 in the search handler whenever the filter changes.
   const SOURCES_PER_PAGE = 8;
@@ -110,6 +115,7 @@ export function NewDeployment({
     [serverList, q],
   );
 
+  const readyServers = serverList.filter((s) => s.status === "ready");
   const ready = Boolean(source && server);
   const configureHref = ready
     ? `/configure?repo=${encodeURIComponent(source as string)}&server=${server}`
@@ -182,13 +188,19 @@ export function NewDeployment({
 
           <div className="flex items-center justify-between border-b border-line px-5 py-3 text-[13px]">
             <div className="flex items-center gap-2">
-              <button className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-cream">
-                <GithubMark /> github <ChevronDown className="text-muted" />
-              </button>
+              <span className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-muted">
+                <GithubMark /> github
+              </span>
               <span className="text-faint">›</span>
-              <button className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5 text-cream">
-                {account ?? "not connected"} <ChevronDown className="text-muted" />
-              </button>
+              <OwnerDropdown
+                owners={owners}
+                value={ownerFilter}
+                account={account}
+                onChange={(o) => {
+                  setOwnerFilter(o);
+                  setPage(0);
+                }}
+              />
             </div>
             <span className="text-muted">↳ {filteredSources.length} visible</span>
           </div>
@@ -357,23 +369,42 @@ export function NewDeployment({
         )}
       </div>
 
-      {/* continue affordance */}
-      {ready && (
-        <Link
-          href={configureHref}
-          className="rise mt-5 flex items-center justify-between rounded-xl border border-lime/50 bg-lime/[0.06] px-5 py-4 transition-colors hover:bg-lime/[0.1]"
-        >
-          <span className="flex items-center gap-3 text-[14px] text-cream">
-            <span className="text-lime">→ configure</span>
+      {/* deploy bar: pick a target server, then head to the deployment page */}
+      {source && (
+        <div className="rise mt-5 flex flex-col gap-3 rounded-xl border border-lime/50 bg-lime/[0.06] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <span className="flex items-center gap-2 text-[14px] text-cream">
+            <span className="text-lime">→ deploy</span>
             {source}
-            <span className="text-faint">→</span>
-            {server}
           </span>
-          <span className="flex items-center gap-2 text-[13px] text-lime">
-            continue
-            <kbd className="rounded-md border border-lime/40 px-2 py-0.5 text-[11px]">↵ enter</kbd>
-          </span>
-        </Link>
+          <div className="flex items-center gap-3">
+            <select
+              value={server ?? ""}
+              onChange={(e) => setServer(e.target.value || null)}
+              className="rounded-md border border-line bg-surface px-3 py-2 text-[13px] text-cream focus:border-line-strong focus:outline-none"
+            >
+              <option value="">
+                {readyServers.length ? "select a server…" : "no ready servers — set one up first"}
+              </option>
+              {readyServers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} · {s.ip}
+                </option>
+              ))}
+            </select>
+            <Link
+              href={configureHref}
+              aria-disabled={!ready}
+              tabIndex={ready ? 0 : -1}
+              className={`flex items-center gap-2 rounded-md px-4 py-2 text-[13px] font-bold transition-transform ${
+                ready
+                  ? "cta-glow bg-lime-fill text-black hover:-translate-y-0.5"
+                  : "pointer-events-none border border-line text-muted opacity-50"
+              }`}
+            >
+              deploy <ArrowRight />
+            </Link>
+          </div>
+        </div>
       )}
 
       {/* footer */}
