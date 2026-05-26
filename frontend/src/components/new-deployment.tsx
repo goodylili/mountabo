@@ -52,7 +52,11 @@ export function NewDeployment({
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
   const [page, setPage] = useState(0);
   const [catalog, setCatalog] = useState<SetupOption[]>([]);
-  const [applyTarget, setApplyTarget] = useState<{ server: ServerView; desired: string[] } | null>(null);
+  const [applyTarget, setApplyTarget] = useState<{
+    server: ServerView;
+    desired: string[];
+    params: Record<string, Record<string, string>>;
+  } | null>(null);
 
   function setServerStatus(id: string, status: ServerStatus) {
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
@@ -321,8 +325,8 @@ export function NewDeployment({
               return (
                 <li
                   key={s.id}
-                  className={`rounded-lg border transition-colors ${
-                    active ? "border-lime/60 bg-lime/[0.05]" : "border-line bg-surface-2 hover:border-line-strong"
+                  className={`rounded-lg border bg-surface-2 transition-colors ${
+                    active ? "border-lime/60" : "border-line hover:border-line-strong"
                   }`}
                 >
                   <div className="flex items-center gap-4 px-4 py-3.5">
@@ -358,7 +362,7 @@ export function NewDeployment({
                       key={`${s.id}:${(s.options ?? []).join(",")}`}
                       server={s}
                       catalog={catalog}
-                      onApply={(desired) => setApplyTarget({ server: s, desired })}
+                      onApply={(desired, params) => setApplyTarget({ server: s, desired, params })}
                     />
                   )}
                 </li>
@@ -458,7 +462,7 @@ export function NewDeployment({
         title={`applying settings to ${applyTarget.server.name}`}
         subtitle={applyTarget.server.ip}
         timezone={applyTarget.server.timezone}
-        url={`/api/servers/${applyTarget.server.id}/options?set=${encodeURIComponent(applyTarget.desired.join(","))}`}
+        url={applyUrl(applyTarget.server.id, applyTarget.desired, applyTarget.params)}
         onDone={(ok) => {
           if (ok) updateServerOptions(applyTarget.server.id, applyTarget.desired);
         }}
@@ -467,6 +471,22 @@ export function NewDeployment({
     )}
     </>
   );
+}
+
+// Builds the apply-options SSE URL: ?set=<ids>&param.<id>.<key>=<value>.
+function applyUrl(
+  serverId: string,
+  desired: string[],
+  params: Record<string, Record<string, string>>,
+): string {
+  const qs = new URLSearchParams();
+  qs.set("set", desired.join(","));
+  for (const [optId, kv] of Object.entries(params)) {
+    for (const [key, val] of Object.entries(kv)) {
+      qs.set(`param.${optId}.${key}`, val);
+    }
+  }
+  return `/api/servers/${serverId}/options?${qs.toString()}`;
 }
 
 function ViewTab({

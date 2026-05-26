@@ -195,16 +195,21 @@ func (c *Client) Bootstrap(ctx context.Context, t usecase.SSHTarget, p usecase.B
 
 // ApplyOptions runs the disable fragments for removed options then the enable
 // fragments for added ones, as root via sudo, over the mountabo-user key
-// connection. Streams combined output to out.
-func (c *Client) ApplyOptions(ctx context.Context, t usecase.SSHTarget, add, remove []string, out io.Writer) error {
+// connection. Each enable fragment is rendered as a template with that option's
+// params. Streams combined output to out.
+func (c *Client) ApplyOptions(ctx context.Context, t usecase.SSHTarget, add, remove []string, params map[string]map[string]string, out io.Writer) error {
+	script, err := composeApply(add, remove, params)
+	if err != nil {
+		return err
+	}
 	// Connected as the mountabo user; run as root via passwordless sudo.
-	if err := c.runScript(ctx, t, "sudo -n bash -s", composeApply(add, remove), out); err != nil {
+	if err := c.runScript(ctx, t, "sudo -n bash -s", script, out); err != nil {
 		return fmt.Errorf("apply options: %w", err)
 	}
 	return nil
 }
 
-func composeApply(add, remove []string) string {
+func composeApply(add, remove []string, params map[string]map[string]string) (string, error) {
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\nexport DEBIAN_FRONTEND=noninteractive\nlog() { echo \"==> $*\"; }\n")
 	if len(add) > 0 {
@@ -217,13 +222,33 @@ func composeApply(add, remove []string) string {
 		}
 	}
 	for _, id := range add {
-		if frag, ok := optionScripts[id]; ok {
-			b.WriteString("\n")
-			b.WriteString(frag)
+		frag, ok := optionScripts[id]
+		if !ok {
+			continue
 		}
+		rendered, err := renderFragment(id, frag, params[id])
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("\n")
+		b.WriteString(rendered)
 	}
 	b.WriteString("\nlog \"settings applied\"\n")
-	return b.String()
+	return b.String(), nil
+}
+
+// renderFragment substitutes an option's collected params into its script via
+// text/template. Fragments without {{...}} render unchanged.
+func renderFragment(id, fragment string, params map[string]string) (string, error) {
+	tmpl, err := template.New(id).Option("missingkey=zero").Parse(fragment)
+	if err != nil {
+		return "", fmt.Errorf("parse option %q script: %w", id, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, params); err != nil {
+		return "", fmt.Errorf("render option %q script: %w", id, err)
+	}
+	return buf.String(), nil
 }
 
 // runScript dials, streams the script to `command` over a session (cancelling on

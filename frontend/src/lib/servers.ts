@@ -27,12 +27,21 @@ export type ServerView = {
   options: string[] | null;
 };
 
+// A parameter an option needs (collected inline when ticked).
+export type OptionParam = {
+  key: string;
+  label: string;
+  default?: string;
+  placeholder?: string;
+};
+
 // An opt-in hardening step the operator can choose. Category groups them in the UI.
 export type SetupOption = {
   id: string;
   name: string;
   category: string;
   description: string;
+  params?: OptionParam[];
 };
 
 // Maps a real ServerView to the display Server shape the configure/deploy views

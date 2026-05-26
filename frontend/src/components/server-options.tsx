@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import type { ServerView, SetupOption } from "@/lib/servers";
+import type { OptionParam, ServerView, SetupOption } from "@/lib/servers";
 
-const CATEGORY_ORDER = ["Network", "SSH", "Monitoring", "System", "Audit"];
+const CATEGORY_ORDER = ["Network", "SSH", "TLS", "Monitoring", "System", "Audit"];
 
 // ServerOptions is the per-server hardening panel shown under a selected, ready
-// server. Options are grouped into category sub-pages (Network, SSH, …). Toggling
-// changes pending state only; nothing happens to the box until the operator
-// clicks confirm, which hands the desired set to onApply (the parent streams the
-// live apply over SSH).
+// server. Options are grouped into category sub-pages. Toggling changes pending
+// state only; options that need parameters reveal inline inputs the moment they
+// are ticked. Nothing is applied until the operator confirms, which hands the
+// desired set + collected params to onApply (the parent streams the live apply).
 export function ServerOptions({
   server,
   catalog,
@@ -17,23 +17,40 @@ export function ServerOptions({
 }: {
   server: ServerView;
   catalog: SetupOption[];
-  onApply: (desired: string[]) => void;
+  onApply: (desired: string[], params: Record<string, Record<string, string>>) => void;
 }) {
   const current = new Set(server.options ?? []);
   const [pending, setPending] = useState<Record<string, boolean>>({});
+  const [paramValues, setParamValues] = useState<Record<string, Record<string, string>>>({});
   const [activeCat, setActiveCat] = useState<string | null>(null);
 
-  // Whether an option is on in the pending view (falls back to its applied state
-  // for options the user hasn't touched — robust if the catalog loads late).
   const isOn = (id: string) => pending[id] ?? current.has(id);
+  const paramVal = (id: string, p: OptionParam) => paramValues[id]?.[p.key] ?? p.default ?? "";
+  const setParam = (id: string, key: string, val: string) =>
+    setParamValues((s) => ({ ...s, [id]: { ...(s[id] ?? {}), [key]: val } }));
 
   const categories = CATEGORY_ORDER.filter((c) => catalog.some((o) => o.category === c));
   for (const o of catalog) if (!categories.includes(o.category)) categories.push(o.category);
   const active = activeCat && categories.includes(activeCat) ? activeCat : categories[0] ?? "";
   const items = catalog.filter((o) => o.category === active);
 
-  const desired = catalog.map((o) => o.id).filter(isOn);
   const changed = catalog.filter((o) => isOn(o.id) !== current.has(o.id)).length;
+  // A ticked option with required params left blank can't be applied.
+  const missingParams = catalog.some(
+    (o) => isOn(o.id) && (o.params ?? []).some((p) => !paramVal(o.id, p).trim()),
+  );
+  const canApply = changed > 0 && !missingParams;
+
+  function apply() {
+    const desired = catalog.map((o) => o.id).filter((id) => isOn(id));
+    const params: Record<string, Record<string, string>> = {};
+    for (const o of catalog) {
+      if (isOn(o.id) && o.params?.length) {
+        params[o.id] = Object.fromEntries(o.params.map((p) => [p.key, paramVal(o.id, p)]));
+      }
+    }
+    onApply(desired, params);
+  }
 
   return (
     <div className="border-t border-line px-4 py-4">
@@ -42,7 +59,6 @@ export function ServerOptions({
         mountabo, with sudo) only after you confirm.
       </p>
 
-      {/* category sub-pages */}
       <div className="mt-3 flex flex-wrap gap-1">
         {categories.map((c) => {
           const onCount = catalog.filter((o) => o.category === c && isOn(o.id)).length;
@@ -73,7 +89,7 @@ export function ServerOptions({
                 onChange={(e) => setPending((s) => ({ ...s, [o.id]: e.target.checked }))}
                 className="mt-0.5 h-4 w-4 accent-lime"
               />
-              <span>
+              <span className="min-w-0">
                 <span className="flex items-center gap-2 text-[13px] font-medium text-cream">
                   {o.name}
                   {current.has(o.id) && <span className="text-[10px] text-blue">applied</span>}
@@ -81,16 +97,39 @@ export function ServerOptions({
                 <span className="mt-1 block text-[12px] leading-5 text-muted">{o.description}</span>
               </span>
             </label>
+
+            {/* inline params, shown when ticked */}
+            {isOn(o.id) && o.params && o.params.length > 0 && (
+              <div className="mt-3 grid grid-cols-2 gap-2 pl-7">
+                {o.params.map((p) => (
+                  <label key={p.key} className="block">
+                    <span className="mb-1 block text-[11px] text-muted">{p.label}</span>
+                    <input
+                      value={paramVal(o.id, p)}
+                      onChange={(e) => setParam(o.id, p.key, e.target.value)}
+                      placeholder={p.placeholder}
+                      className={`w-full rounded-md border bg-surface-2 px-2.5 py-1.5 text-[12px] text-cream placeholder:text-muted focus:outline-none ${
+                        paramVal(o.id, p).trim() ? "border-line focus:border-line-strong" : "border-red-500/40"
+                      }`}
+                    />
+                  </label>
+                ))}
+              </div>
+            )}
           </li>
         ))}
       </ul>
 
       <button
-        onClick={() => onApply(desired)}
-        disabled={changed === 0}
+        onClick={apply}
+        disabled={!canApply}
         className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-lime/50 bg-lime/[0.06] px-4 py-2.5 text-[12.5px] font-medium text-lime transition-colors hover:bg-lime/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
       >
-        {changed === 0 ? "no changes to apply" : `confirm & apply ${changed} change${changed === 1 ? "" : "s"}`}
+        {changed === 0
+          ? "no changes to apply"
+          : missingParams
+            ? "fill in the required fields above"
+            : `confirm & apply ${changed} change${changed === 1 ? "" : "s"}`}
       </button>
     </div>
   );

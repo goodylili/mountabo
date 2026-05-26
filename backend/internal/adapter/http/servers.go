@@ -96,12 +96,30 @@ func (h *ServersHandler) Setup(w nethttp.ResponseWriter, r *nethttp.Request) {
 // ?set=… selection, streaming the live log as SSE.
 func (h *ServersHandler) ApplyOptions(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := r.PathValue("id")
+	q := r.URL.Query()
 	var desired []string
-	if raw := r.URL.Query().Get("set"); raw != "" {
+	if raw := q.Get("set"); raw != "" {
 		desired = strings.Split(raw, ",")
 	}
+	// Per-option params arrive as param.<optionID>.<key>=value. Option ids use
+	// hyphens (never dots), so splitting on the first dot is unambiguous.
+	params := map[string]map[string]string{}
+	for key, vals := range q {
+		rest, ok := strings.CutPrefix(key, "param.")
+		if !ok || len(vals) == 0 {
+			continue
+		}
+		optID, pKey, ok := strings.Cut(rest, ".")
+		if !ok {
+			continue
+		}
+		if params[optID] == nil {
+			params[optID] = map[string]string{}
+		}
+		params[optID][pKey] = vals[0]
+	}
 	h.stream(w, "settings applied", func(out io.Writer) error {
-		return h.svc.ApplyOptions(r.Context(), id, desired, out)
+		return h.svc.ApplyOptions(r.Context(), id, desired, params, out)
 	})
 }
 

@@ -96,14 +96,26 @@ type BootstrapParams struct {
 	Options []string
 }
 
+// OptionParam describes one input an option needs before it can be applied
+// (e.g. an SSH port or a domain). The UI prompts for these inline when the
+// option is ticked. Only non-secret values — they travel in the apply request.
+type OptionParam struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Default     string `json:"default,omitempty"`
+	Placeholder string `json:"placeholder,omitempty"`
+}
+
 // SetupOption is an opt-in hardening step the operator can choose to apply. The
 // Description explains what it does and its trade-off so the choice is informed.
-// Category groups related options in the UI.
+// Category groups related options in the UI; Params (if any) are collected
+// inline when the option is ticked and substituted into its script.
 type SetupOption struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Description string `json:"description"`
+	ID          string        `json:"id"`
+	Name        string        `json:"name"`
+	Category    string        `json:"category"`
+	Description string        `json:"description"`
+	Params      []OptionParam `json:"params,omitempty"`
 }
 
 // SetupOptions is the catalog of optional steps, every one a parameterless
@@ -115,8 +127,11 @@ var SetupOptions = []SetupOption{
 
 	{ID: "ssh-limits", Category: "SSH", Name: "Limit SSH auth attempts", Description: "Set MaxAuthTries 3 and LoginGraceTime 30. Cheaper than fail2ban — but multi-key ssh-agents can hit the limit on legitimate logins."},
 	{ID: "ssh-allowusers", Category: "SSH", Name: "Restrict SSH to mountabo + root", Description: "Whitelist who may SSH in (AllowUsers mountabo root). Blocks everyone else silently — handy, until you forget you added it."},
+	{ID: "ssh-port", Category: "SSH", Name: "Change SSH port", Description: "Move sshd off port 22 to cut brute-force log noise. Obscurity, not real protection — and you must remember the port everywhere.", Params: []OptionParam{{Key: "port", Label: "SSH port", Default: "2222", Placeholder: "2222"}}},
 	{ID: "fail2ban", Category: "SSH", Name: "fail2ban", Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force. Can briefly lock you out if you mistype your own login several times."},
 	{ID: "crowdsec", Category: "SSH", Name: "CrowdSec", Description: "Modern fail2ban with community-shared blocklists — blocks IPs flagged across the network. Better signal, heavier; the shared list occasionally bans something unexpected."},
+
+	{ID: "caddy", Category: "TLS", Name: "Caddy reverse proxy + HTTPS", Description: "Front a local app with Caddy — automatic Let's Encrypt TLS for your domain. Needs DNS for the domain already pointing at this server.", Params: []OptionParam{{Key: "domain", Label: "domain", Placeholder: "app.example.com"}, {Key: "upstream", Label: "app port", Default: "3000", Placeholder: "3000"}}},
 
 	{ID: "netdata", Category: "Monitoring", Name: "Netdata (local)", Description: "Real-time CPU/RAM/disk/network/Docker dashboard, bound to 127.0.0.1:19999. Reach it via an SSH tunnel or a reverse proxy with auth."},
 	{ID: "uptime-kuma", Category: "Monitoring", Name: "Uptime Kuma", Description: "Self-hosted uptime monitor with notifications, on 127.0.0.1:3001. Runs on the box it monitors, so host critical alerts elsewhere too."},
@@ -168,9 +183,10 @@ type ServerBootstrapper interface {
 
 // OptionApplier enables/disables hardening options on an already-set-up server
 // (connecting as the mountabo user via its key, running with sudo), streaming
-// output to out. add and remove are option ids in catalog order.
+// output to out. add and remove are option ids in catalog order; params maps an
+// option id to its collected parameter values (key→value).
 type OptionApplier interface {
-	ApplyOptions(ctx context.Context, t SSHTarget, add, remove []string, out io.Writer) error
+	ApplyOptions(ctx context.Context, t SSHTarget, add, remove []string, params map[string]map[string]string, out io.Writer) error
 }
 
 // KeyMaker generates an SSH keypair for mountabo's access to a server.
@@ -392,7 +408,7 @@ func (s *ServerService) Setup(ctx context.Context, id string, options []string, 
 // options and the disable scripts for unticked ones, streaming to out, then
 // persists the new set. Only valid once the server is ready (the mountabo key
 // exists).
-func (s *ServerService) ApplyOptions(ctx context.Context, id string, desired []string, out io.Writer) error {
+func (s *ServerService) ApplyOptions(ctx context.Context, id string, desired []string, params map[string]map[string]string, out io.Writer) error {
 	s.mu.Lock()
 	if s.settingUp[id] {
 		s.mu.Unlock()
@@ -429,7 +445,7 @@ func (s *ServerService) ApplyOptions(ctx context.Context, id string, desired []s
 	}
 
 	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
-	if err := s.applier.ApplyOptions(ctx, target, add, remove, out); err != nil {
+	if err := s.applier.ApplyOptions(ctx, target, add, remove, params, out); err != nil {
 		return fmt.Errorf("apply options: %w", err)
 	}
 
