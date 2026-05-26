@@ -37,12 +37,13 @@ func (f fakeRepoLister) List(context.Context, Token) ([]Repo, error) {
 }
 
 type fakePortDetector struct {
-	ports []ServicePort
-	err   error
+	ports    []ServicePort
+	strategy DeployStrategy
+	err      error
 }
 
-func (f fakePortDetector) DetectPorts(context.Context, Token, RepoRef) ([]ServicePort, error) {
-	return f.ports, f.err
+func (f fakePortDetector) DetectPorts(context.Context, Token, RepoRef) ([]ServicePort, DeployStrategy, error) {
+	return f.ports, f.strategy, f.err
 }
 
 type fakeStore struct {
@@ -173,13 +174,16 @@ func TestDetectPorts_ReturnsDetectedPorts(t *testing.T) {
 		fakeExchanger{},
 		fakeFetcher{},
 		fakeRepoLister{},
-		fakePortDetector{ports: want},
+		fakePortDetector{ports: want, strategy: StrategyCompose},
 		&fakeStore{loadTok: Token{AccessToken: "gho_abc"}},
 	)
 
-	got, err := c.DetectPorts(context.Background(), RepoRef{Owner: "octocat", Name: "hello"})
+	got, strategy, err := c.DetectPorts(context.Background(), RepoRef{Owner: "octocat", Name: "hello"})
 	if err != nil {
 		t.Fatalf("DetectPorts returned error: %v", err)
+	}
+	if strategy != StrategyCompose {
+		t.Errorf("strategy = %q, want compose", strategy)
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d ports, want %d", len(got), len(want))
@@ -198,7 +202,7 @@ func TestDetectPorts_NotConnectedPropagates(t *testing.T) {
 		&fakeStore{loadErr: ErrNotConnected},
 	)
 
-	if _, err := c.DetectPorts(context.Background(), RepoRef{}); !errors.Is(err, ErrNotConnected) {
+	if _, _, err := c.DetectPorts(context.Background(), RepoRef{}); !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("err = %v, want ErrNotConnected in chain", err)
 	}
 }

@@ -92,11 +92,22 @@ type RepoLister interface {
 	List(ctx context.Context, t Token) ([]Repo, error)
 }
 
+// DeployStrategy is how a repo is deployed: a docker compose stack, or a single
+// container built from its Dockerfile. Empty when neither is detected.
+type DeployStrategy string
+
+// Deploy strategies, matching the values the workflow generator understands.
+const (
+	StrategyCompose DeployStrategy = "compose"
+	StrategyDocker  DeployStrategy = "docker"
+)
+
 // PortDetector reads a repo's container configuration (a compose file, else a
-// Dockerfile) at the given ref and reports the published ports it declares. A
-// repo with no detectable ports returns an empty slice, not an error.
+// Dockerfile) at the given ref and reports the published ports it declares plus
+// the deploy strategy that fits. A repo with no detectable ports returns an
+// empty slice and an empty strategy, not an error.
 type PortDetector interface {
-	DetectPorts(ctx context.Context, t Token, ref RepoRef) ([]ServicePort, error)
+	DetectPorts(ctx context.Context, t Token, ref RepoRef) ([]ServicePort, DeployStrategy, error)
 }
 
 // TokenStore persists the connection token in the OS keychain. Load returns
@@ -204,17 +215,17 @@ func (c *GitHubConnector) Repositories(ctx context.Context) ([]Repo, error) {
 // using the stored token, so the UI can offer the project's real ports instead
 // of a fixed guess. It returns ErrNotConnected when no token is stored, and an
 // empty slice (no error) when the repo declares no detectable ports.
-func (c *GitHubConnector) DetectPorts(ctx context.Context, ref RepoRef) ([]ServicePort, error) {
+func (c *GitHubConnector) DetectPorts(ctx context.Context, ref RepoRef) ([]ServicePort, DeployStrategy, error) {
 	token, err := c.tokens.Load()
 	if err != nil {
-		return nil, fmt.Errorf("load token: %w", err)
+		return nil, "", fmt.Errorf("load token: %w", err)
 	}
 
-	ports, err := c.ports.DetectPorts(ctx, token, ref)
+	ports, strategy, err := c.ports.DetectPorts(ctx, token, ref)
 	if err != nil {
-		return nil, fmt.Errorf("detect ports: %w", err)
+		return nil, "", fmt.Errorf("detect ports: %w", err)
 	}
-	return ports, nil
+	return ports, strategy, nil
 }
 
 // Disconnect removes the stored token from the keychain. It is idempotent: a

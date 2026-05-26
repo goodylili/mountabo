@@ -134,10 +134,16 @@ type portResponse struct {
 	Editable  bool   `json:"editable"`
 }
 
-// Ports reports the published ports declared in a repo's container config so the
-// configure UI can offer the project's real ports. owner and repo are required;
-// ref (branch/sha) and dir (sub-directory) are optional. A repo with no
-// detectable ports returns an empty array, not an error.
+type portsResponse struct {
+	Strategy string         `json:"strategy"` // "compose", "docker", or "" when neither
+	Ports    []portResponse `json:"ports"`
+}
+
+// Ports reports the published ports declared in a repo's container config and
+// the deploy strategy that fits, so the configure UI can offer the project's
+// real ports and generate the right deploy. owner and repo are required; ref
+// (branch/sha) and dir (sub-directory) are optional. A repo with no detectable
+// ports returns an empty array and strategy "", not an error.
 func (h *GitHubHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
 	q := r.URL.Query()
 	owner, repo := q.Get("owner"), q.Get("repo")
@@ -147,7 +153,7 @@ func (h *GitHubHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
 	}
 
 	ref := usecase.RepoRef{Owner: owner, Name: repo, Ref: q.Get("ref"), Dir: q.Get("dir")}
-	ports, err := h.connector.DetectPorts(r.Context(), ref)
+	ports, strategy, err := h.connector.DetectPorts(r.Context(), ref)
 	if errors.Is(err, usecase.ErrNotConnected) {
 		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
 		return
@@ -158,9 +164,9 @@ func (h *GitHubHandler) Ports(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 
-	out := make([]portResponse, 0, len(ports))
+	out := portsResponse{Strategy: string(strategy), Ports: make([]portResponse, 0, len(ports))}
 	for _, p := range ports {
-		out = append(out, portResponse{
+		out.Ports = append(out.Ports, portResponse{
 			Service:   p.Service,
 			EnvVar:    p.EnvVar,
 			Host:      p.Host,

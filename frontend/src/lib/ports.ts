@@ -17,18 +17,24 @@ export function normalizeDir(rootDir: string): string {
   return rootDir.replace(/^\.?\/*/, "").replace(/\/*$/, "");
 }
 
+// DetectResult is what port detection reports: the deploy strategy that fits
+// the repo ("compose" when it has a Compose file, "docker" when only a
+// Dockerfile, "" when neither) plus the published ports it declares.
+export type DetectResult = { strategy: "compose" | "docker" | ""; ports: DetectedPort[] };
+
 // fetchDetectedPorts asks the local API (which proxies the Go backend) for the
-// ports declared in a repo at a given branch and directory. It returns [] when
-// nothing is detectable so the caller can simply hide the ports section.
+// strategy and ports of a repo at a given branch and directory. It returns an
+// empty result when nothing is detectable so the caller can simply hide the
+// ports section.
 export async function fetchDetectedPorts(
   owner: string,
   repo: string,
   ref: string,
   dir: string,
   signal?: AbortSignal,
-): Promise<DetectedPort[]> {
+): Promise<DetectResult> {
   const params = new URLSearchParams({ owner, repo, ref, dir });
   const resp = await fetch(`/api/github/ports?${params}`, { cache: "no-store", signal });
-  if (!resp.ok) return [];
-  return (await resp.json()) as DetectedPort[];
+  if (!resp.ok) return { strategy: "", ports: [] };
+  return (await resp.json()) as DetectResult;
 }

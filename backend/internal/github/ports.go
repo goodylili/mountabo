@@ -25,14 +25,16 @@ var composeNames = []string{
 	"compose.yaml",
 }
 
-// DetectPorts reads the published ports from a repo's container configuration.
-// It prefers a Compose file in the target directory; absent one, it falls back
-// to a Dockerfile's EXPOSE lines. A repo (or directory) with nothing to read
-// yields an empty slice rather than an error, so the UI simply shows no ports.
-func (c *Client) DetectPorts(ctx context.Context, t usecase.Token, ref usecase.RepoRef) ([]usecase.ServicePort, error) {
+// DetectPorts reads the published ports from a repo's container configuration
+// and reports which deploy strategy fits. It prefers a Compose file in the
+// target directory (strategy "compose"); absent one, it falls back to a
+// Dockerfile's EXPOSE lines (strategy "docker"). A repo (or directory) with
+// neither yields an empty slice and strategy "" rather than an error, so the UI
+// simply shows no ports.
+func (c *Client) DetectPorts(ctx context.Context, t usecase.Token, ref usecase.RepoRef) ([]usecase.ServicePort, usecase.DeployStrategy, error) {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {
-		return nil, fmt.Errorf("build github client: %w", err)
+		return nil, "", fmt.Errorf("build github client: %w", err)
 	}
 
 	dir := strings.Trim(ref.Dir, "/")
@@ -44,9 +46,9 @@ func (c *Client) DetectPorts(ctx context.Context, t usecase.Token, ref usecase.R
 	_, entries, _, err := api.Repositories.GetContents(ctx, ref.Owner, ref.Name, dir, opt)
 	if err != nil {
 		if isNotFound(err) {
-			return nil, nil
+			return nil, "", nil
 		}
-		return nil, fmt.Errorf("read %s/%s contents: %w", ref.Owner, ref.Name, err)
+		return nil, "", fmt.Errorf("read %s/%s contents: %w", ref.Owner, ref.Name, err)
 	}
 
 	present := make(map[string]string, len(entries)) // lowercased name -> real name
@@ -63,27 +65,27 @@ func (c *Client) DetectPorts(ctx context.Context, t usecase.Token, ref usecase.R
 		}
 		content, err := fetchFile(ctx, api, ref, join(dir, actualName), opt)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		ports, err := parseComposePorts(content)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", actualName, err)
+			return nil, "", fmt.Errorf("parse %s: %w", actualName, err)
 		}
-		return ports, nil
+		return ports, usecase.StrategyCompose, nil
 	}
 
-	// No Compose file: any "Dockerfile*" gives us EXPOSE ports to show read-only.
+	// No Compose file: any "Dockerfile*" gives us EXPOSE ports to publish.
 	for lower, real := range present {
 		if strings.HasPrefix(lower, "dockerfile") {
 			content, err := fetchFile(ctx, api, ref, join(dir, real), opt)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
-			return parseDockerfileExpose(content), nil
+			return parseDockerfileExpose(content), usecase.StrategyDocker, nil
 		}
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
 // fetchFile reads a single file's decoded contents from the repo.
