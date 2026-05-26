@@ -157,7 +157,7 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("write deploy script: %w", err)
 	}
 
-	wfPath := workflow.WorkflowPath(cfg)
+	wfPath := workflow.Path(cfg)
 	progress(out, "writing %s", wfPath)
 	if err := s.repo.PutFile(ctx, token, in.Owner, in.Repo, in.Branch, wfPath, workflow.Workflow(cfg), "mountabo: add deploy workflow"); err != nil {
 		return fmt.Errorf("write workflow: %w", err)

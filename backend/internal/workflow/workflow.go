@@ -64,8 +64,8 @@ func (c Config) envNames() []string {
 	return out
 }
 
-// WorkflowPath is the in-repo path of the generated workflow, one per branch.
-func WorkflowPath(c Config) string {
+// Path is the in-repo path of the generated workflow, one per branch.
+func Path(c Config) string {
 	return fmt.Sprintf(".github/workflows/mountabo-deploy-%s.yml", c.Branch)
 }
 

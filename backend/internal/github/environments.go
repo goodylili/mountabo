@@ -44,7 +44,7 @@ func (c *Client) SetEnvSecrets(ctx context.Context, t usecase.Token, owner, repo
 	if err != nil {
 		return fmt.Errorf("look up %s/%s: %w", owner, repo, err)
 	}
-	repoID := int(repository.GetID()) //nolint:gosec // G115: a GitHub repo id fits int; the go-github env-secret API itself takes an int
+	repoID := int(repository.GetID())
 
 	pubKey, _, err := api.Actions.GetEnvPublicKey(ctx, repoID, environment)
 	if err != nil {
