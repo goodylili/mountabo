@@ -1,10 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { ArrowRight, ChevronRight, Refresh } from "@/components/icons";
 import type { Deployment, DeployRun, RunStatus, Server } from "@/lib/data";
+import {
+  type ServerMetrics,
+  fetchServerMetrics,
+  fmtDisk,
+  fmtLoad,
+  fmtMem,
+  fmtUptime,
+} from "@/lib/server-metrics";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -23,10 +32,30 @@ export function MonitorView({
   servers: Server[];
   stamp: string;
 }) {
+  const router = useRouter();
+  const [refreshing, startRefresh] = useTransition();
   const [open, setOpen] = useState<string>(deployments[0]?.app ?? "");
+  const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
   const serverById = new Map(servers.map((s) => [s.id, s]));
 
   const liveCount = deployments.filter((d) => d.status === "live").length;
+  const openServerId = deployments.find((d) => d.app === open)?.serverId ?? "";
+
+  // Read the open deployment's server metrics on demand (no daemon), keyed by
+  // server id so each is fetched once until a refresh clears the cache.
+  useEffect(() => {
+    if (!openServerId || openServerId in metrics) return;
+    const ctrl = new AbortController();
+    fetchServerMetrics(openServerId, ctrl.signal).then((m) =>
+      setMetrics((prev) => ({ ...prev, [openServerId]: m })),
+    );
+    return () => ctrl.abort();
+  }, [openServerId, metrics]);
+
+  function refresh() {
+    setMetrics({}); // drop cached metrics so the open server re-reads
+    startRefresh(() => router.refresh()); // re-pull deployments + their runs
+  }
 
   return (
     <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
@@ -45,8 +74,12 @@ export function MonitorView({
             mountabo checks when you open it: there is no daemon, nothing phones home.
           </p>
         </div>
-        <button className="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-line px-3 py-2 text-[12px] text-lime transition-colors hover:bg-lime/10">
-          <Refresh /> refresh
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-line px-3 py-2 text-[12px] text-lime transition-colors hover:bg-lime/10 disabled:opacity-60"
+        >
+          <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
         </button>
       </div>
 
@@ -67,6 +100,7 @@ export function MonitorView({
         {deployments.map((d) => {
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;
+          const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
           return (
             <section key={d.app} className="rounded-xl border border-line bg-surface">
               <button
@@ -96,9 +130,10 @@ export function MonitorView({
               {isOpen && (
                 <div className="border-t border-line px-5 py-4">
                   <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12.5px]">
-                    <Metric label="cpu" value={d.metrics.cpu} />
-                    <Metric label="mem" value={d.metrics.mem} />
-                    <Metric label="ping" value={d.metrics.ping} />
+                    <Metric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
+                    <Metric label="mem" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
+                    <Metric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
+                    <Metric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
                     <a
                       href={d.url}
                       target="_blank"
