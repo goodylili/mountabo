@@ -266,9 +266,9 @@ export function ConfigureView({
                       ? p.envVar
                       : p.service || `port ${p.container}`;
                   return (
-                    <label key={`${p.service}-${p.envVar}-${p.container}-${i}`} className="block">
+                    <label key={`${p.service}-${p.envVar}-${p.container}-${i}`} className="block min-w-0">
                       <span className="mb-1 flex items-center gap-1.5 text-[11px] text-muted">
-                        {label}
+                        <span className="truncate" title={label}>{label}</span>
                         {occupied && (
                           <span className="text-red-300" title={`${value} is already in use on ${server.name}`}>
                             {"\u{1F6AB}"} in use on the server
@@ -284,9 +284,12 @@ export function ConfigureView({
                           className={`${inputCls} ${occupied ? "border-red-400/60" : ""}`}
                         />
                       ) : (
-                        <div className={`${inputCls} flex items-center justify-between`} title="fixed in your compose file">
-                          <span>{p.host || "auto"}</span>
-                          <span className="text-[11px] text-faint">fixed</span>
+                        <div
+                          className={`${inputCls} flex items-center justify-between gap-2`}
+                          title={`fixed in your compose file: ${p.host || "auto"}`}
+                        >
+                          <span className="min-w-0 flex-1 truncate font-mono">{p.host || "auto"}</span>
+                          <span className="shrink-0 text-[11px] text-faint">fixed</span>
                         </div>
                       )}
                     </label>
