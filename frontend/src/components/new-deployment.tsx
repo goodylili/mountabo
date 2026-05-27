@@ -394,24 +394,29 @@ export function NewDeployment({
               );
             })}
 
-            <li>
-              {showAddServer ? (
-                <AddServerForm
-                  onAdded={(srv) => {
-                    setServerList((prev) => [...prev, srv]);
-                    setShowAddServer(false);
-                  }}
-                  onCancel={() => setShowAddServer(false)}
-                />
-              ) : (
-                <button
-                  onClick={() => setShowAddServer(true)}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong px-4 py-4 text-[13px] text-muted transition-colors hover:border-lime/50 hover:text-cream"
-                >
-                  <Plus /> add a server (ip + root password)
-                </button>
-              )}
-            </li>
+            {/* Adding a server needs its ip + root password (to bootstrap it).
+                Once a server is selected, that's irrelevant, deploys use its SSH
+                key, so the onboarding fields are hidden. */}
+            {!server && (
+              <li>
+                {showAddServer ? (
+                  <AddServerForm
+                    onAdded={(srv) => {
+                      setServerList((prev) => [...prev, srv]);
+                      setShowAddServer(false);
+                    }}
+                    onCancel={() => setShowAddServer(false)}
+                  />
+                ) : (
+                  <button
+                    onClick={() => setShowAddServer(true)}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line-strong px-4 py-4 text-[13px] text-muted transition-colors hover:border-lime/50 hover:text-cream"
+                  >
+                    <Plus /> add a server (ip + root password)
+                  </button>
+                )}
+              </li>
+            )}
           </ul>
         </section>
         )}
