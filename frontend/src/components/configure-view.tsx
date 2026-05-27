@@ -121,6 +121,12 @@ export function ConfigureView({
   const [deployBody, setDeployBody] = useState<PreviewRequest | null>(null);
   const [deployed, setDeployed] = useState(false);
 
+  // Any non-empty env var key that isn't a valid name blocks deploy.
+  const envInvalid = envVars.some((v) => {
+    const k = v.key.trim();
+    return k !== "" && !envNamePattern.test(k);
+  });
+
   const previewReq: PreviewRequest = useMemo(
     () => ({
       app: app.trim() || source.name,
@@ -131,7 +137,12 @@ export function ConfigureView({
       rootDir,
       deployDir,
       ports: configuredPorts,
-      envVars: envVars.filter((v) => v.key.trim()),
+      // Only valid, named vars go to the backend; invalid keys are flagged
+      // inline and block deploy below.
+      envVars: envVars.filter((v) => {
+        const k = v.key.trim();
+        return k !== "" && envNamePattern.test(k);
+      }),
     }),
     [app, source.owner, source.name, branch, strategy, rootDir, deployDir, configuredPorts, envVars],
   );
@@ -314,30 +325,43 @@ export function ConfigureView({
           )}
 
           <div className="space-y-2">
-            {envVars.map((row, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <input
-                  value={row.key}
-                  onChange={(e) => setEnv(i, { key: e.target.value })}
-                  placeholder="KEY"
-                  className={`${inputCls} min-w-0 flex-1 font-mono`}
-                />
-                <input
-                  value={row.value}
-                  onChange={(e) => setEnv(i, { value: e.target.value })}
-                  placeholder="value"
-                  type="password"
-                  className={`${inputCls} min-w-0 flex-1`}
-                />
-                <button
-                  onClick={() => setEnvVars((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))}
-                  className="shrink-0 rounded-md border border-line px-2.5 py-2 text-[12px] text-muted transition-colors hover:border-red-400/50 hover:text-red-300"
-                  aria-label="remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
+            {envVars.map((row, i) => {
+              const key = row.key.trim();
+              const badKey = key !== "" && !envNamePattern.test(key);
+              return (
+                <div key={i} className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <input
+                      value={row.key}
+                      onChange={(e) => setEnv(i, { key: e.target.value })}
+                      placeholder="KEY"
+                      aria-invalid={badKey}
+                      className={`${inputCls} w-full font-mono ${badKey ? "border-red-400/60" : ""}`}
+                    />
+                    {badKey && (
+                      <span className="mt-1 block text-[11px] text-red-300">
+                        not a valid name. use letters, digits and underscores, and don&apos;t start with a digit. split
+                        a value like an ip and a password into two named variables.
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    value={row.value}
+                    onChange={(e) => setEnv(i, { value: e.target.value })}
+                    placeholder="value"
+                    type="password"
+                    className={`${inputCls} min-w-0 flex-1`}
+                  />
+                  <button
+                    onClick={() => setEnvVars((rows) => (rows.length > 1 ? rows.filter((_, idx) => idx !== i) : rows))}
+                    className="shrink-0 rounded-md border border-line px-2.5 py-2 text-[12px] text-muted transition-colors hover:border-red-400/50 hover:text-red-300"
+                    aria-label="remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
             <button
               onClick={() => setEnvVars((rows) => [...rows, { key: "", value: "" }])}
               className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream"
@@ -350,10 +374,16 @@ export function ConfigureView({
         {/* CTA: commit the workflow + deploy.sh and set the secrets, streamed live. */}
         <div className="mt-8">
           <button
-            disabled={!preview}
+            disabled={!preview || envInvalid}
             onClick={() => setDeployBody(previewReq)}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-6 py-4 font-bold text-lime transition-colors hover:bg-lime/20 disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-2 disabled:text-muted"
-            title={preview ? "commit the workflow + deploy.sh and set the Actions secrets" : "waiting for a valid configuration"}
+            title={
+              envInvalid
+                ? "fix the invalid environment variable name first"
+                : preview
+                  ? "commit the workflow + deploy.sh and set the Actions secrets"
+                  : "waiting for a valid configuration"
+            }
           >
             {deployed ? "re-deploy configuration" : "deploy"}
           </button>
@@ -431,6 +461,10 @@ export function ConfigureView({
 
 const inputCls =
   "w-full rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-[13px] text-cream placeholder:text-muted focus:border-line-strong focus:outline-none";
+
+// A valid GitHub Actions secret / env var name: letters, digits, underscores,
+// not starting with a digit. Matches the backend's rule.
+const envNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function Section({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
