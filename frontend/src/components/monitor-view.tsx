@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { StreamLog } from "@/components/stream-log";
@@ -73,8 +73,13 @@ export function MonitorView({
   stamp: string;
 }) {
   const router = useRouter();
+  // After a successful deploy the configure page sends the operator here with
+  // ?app=<name>, so open that deployment; otherwise open the first one.
+  const appParam = useSearchParams().get("app");
+  const [open, setOpen] = useState<string>(
+    (appParam && deployments.some((d) => d.app === appParam) ? appParam : deployments[0]?.app) ?? "",
+  );
   const [refreshing, startRefresh] = useTransition();
-  const [open, setOpen] = useState<string>(deployments[0]?.app ?? "");
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const serverById = new Map(serverList.map((s) => [s.id, s]));

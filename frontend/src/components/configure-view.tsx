@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { RepoTreePicker } from "@/components/repo-tree-picker";
@@ -27,6 +28,7 @@ export function ConfigureView({
   branch: string;
   account: string | null;
 }) {
+  const router = useRouter();
   const [app, setApp] = useState(source.name);
   const [rootDir, setRootDir] = useState("./");
   const [deployDir, setDeployDir] = useState(`/opt/${source.name}`);
@@ -518,7 +520,12 @@ export function ConfigureView({
           body={deployBody}
           onClose={() => setDeployBody(null)}
           onDone={(ok) => {
-            if (ok) setDeployed(true);
+            if (!ok) return;
+            setDeployed(true);
+            // On a successful configure-and-deploy, send the operator to the
+            // deployments page focused on this app, where they can watch the
+            // GitHub Actions run finish and open the live link once it is up.
+            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}`);
           }}
         />
       )}
