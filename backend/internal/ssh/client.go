@@ -111,7 +111,10 @@ func (c *Client) dial(ctx context.Context, t usecase.SSHTarget) (*ssh.Client, st
 	}
 
 	addr := net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
-	dialer := net.Dialer{Timeout: c.dialTimeout}
+	// Enable TCP-level keepalive on every dialed connection: long-lived forwards
+	// (the dashboard tunnel) otherwise sit idle and get torn down by a NAT or the
+	// server's idle timeout. Short-lived command sessions are unaffected.
+	dialer := net.Dialer{Timeout: c.dialTimeout, KeepAlive: keepaliveInterval}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, "", fmt.Errorf("dial %s: %w", addr, err)

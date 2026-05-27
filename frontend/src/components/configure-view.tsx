@@ -213,10 +213,10 @@ export function ConfigureView({
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-10 px-4 py-8 sm:px-6 lg:flex-row lg:items-start lg:gap-12 lg:px-8 lg:py-10">
+    <main className="mx-auto flex w-full max-w-[1480px] flex-1 flex-col gap-10 px-4 py-8 sm:px-6 lg:flex-row lg:items-start lg:gap-20 lg:px-8 lg:py-10">
       {/* ── left: the walkthrough form. Fixed width and wider than the preview,
           so it keeps its size across viewports rather than stretching. ── */}
-      <div className="rise flex flex-col lg:w-[600px] lg:shrink-0">
+      <div className="rise flex flex-col lg:w-[800px] lg:shrink-0">
         <p className="label">step 02 / 02 · configure</p>
         <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] tracking-tight text-cream sm:text-5xl sm:leading-[1.02]">
           configure your deployment.

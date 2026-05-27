@@ -110,15 +110,17 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
   const windowTitle = selected ? `${host}  ~  ssh` : "mountabo  ~  no server selected";
 
   return (
-    <main className="mx-auto w-full max-w-[1100px] flex-1 px-4 py-10 sm:px-6 lg:px-8">
+    <main className="mx-auto w-full max-w-[1100px] flex-1 px-4 pb-16 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       <p className="label">terminal</p>
-      <h1 className="mt-2 text-2xl font-bold tracking-tight text-cream">
-        run a command on your server
+      <h1 className="mt-6 text-4xl font-extrabold leading-[1.02] tracking-tight text-cream sm:text-5xl sm:leading-[0.98] lg:text-6xl">
+        a shell on your server,
+        <br />
+        right in the <span className="italic text-lime">browser.</span>
       </h1>
-      <p className="mt-2 max-w-2xl text-[13px] leading-6 text-body">
-        Pick one of your set-up servers, type a shell command, and see its output and exit status.
-        Commands run as the mountabo user over SSH. Each command is confirmed before it runs, unless
-        you turn on express mode.
+      <p className="mt-6 max-w-2xl text-[16px] leading-8 text-body">
+        pick a server, run shell commands over ssh, and read the output here. ask the helper for a
+        command and it suggests one you review and run, never on its own. everything runs as the
+        mountabo user, confirmed before it runs unless you turn on express mode.
       </p>
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">

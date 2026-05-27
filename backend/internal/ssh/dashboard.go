@@ -7,12 +7,20 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 	"golang.org/x/crypto/ssh"
 )
 
 var _ usecase.DashboardTunnel = (*Client)(nil)
+
+// keepaliveInterval is how often the forwarder pings the server over the SSH
+// connection. A long-lived dashboard tunnel sits idle between requests, so
+// without this the server's sshd idle timeout (or a NAT in the middle) drops
+// the connection and the dashboard stops loading. ~30s is well inside the
+// default ClientAliveInterval window.
+const keepaliveInterval = 30 * time.Second
 
 // OpenTunnel sets up an SSH local port-forward (the `ssh -L` model): it binds a
 // listener to an ephemeral 127.0.0.1 port on this machine and, for every
@@ -45,6 +53,8 @@ func (c *Client) OpenTunnel(ctx context.Context, t usecase.SSHTarget, port int) 
 		done:     make(chan struct{}),
 	}
 	go fwd.serve()
+	fwd.wg.Add(1)
+	go fwd.keepalive()
 
 	return listener.Addr().String(), fwd.close, nil
 }
@@ -78,9 +88,39 @@ func (f *forwarder) serve() {
 	}
 }
 
+// keepalive pings the server over the SSH connection on a fixed interval so the
+// long-lived tunnel is not torn down while it sits idle between dashboard
+// requests (an sshd idle timeout or an intermediate NAT would otherwise drop
+// it). It exits when the forwarder is closed; a failed request means the
+// connection is already gone, so it stops too. It uses a reusable ticker rather
+// than time.After in the loop so no timer accumulates.
+func (f *forwarder) keepalive() {
+	defer f.wg.Done()
+	ticker := time.NewTicker(keepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-f.done:
+			return
+		case <-ticker.C:
+			// A global keepalive@openssh.com request; wantReply true so the call
+			// blocks until the server answers, which is what proves the link is
+			// alive. A non-nil error means the connection is dead.
+			if _, _, err := f.client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // handle dials the remote loopback address through the SSH connection and pipes
-// bytes both ways until either side closes. If the SSH dial fails (the tunnel is
-// going away or the tool is not listening), the local connection is dropped.
+// bytes both ways. Each direction runs in its own goroutine; when one finishes
+// (its source closed), the peer connection is closed to unblock the other copy,
+// then both are awaited. It does NOT return on the first copy alone: a websocket
+// or other long-lived stream often has one half quiet for a long time, and
+// tearing the pair down on the first io.Copy would kill it. If the SSH dial
+// fails (the tunnel is going away or the tool is not listening), the local
+// connection is dropped. A forwarder close also unblocks both copies.
 func (f *forwarder) handle(local net.Conn) {
 	defer func() { _ = local.Close() }()
 
@@ -90,21 +130,42 @@ func (f *forwarder) handle(local net.Conn) {
 	}
 	defer func() { _ = remote.Close() }()
 
-	// Copy in both directions; the first side to close ends the pair.
-	pipeDone := make(chan struct{}, 2)
+	// Closing the peer conn is what makes a blocked io.Copy on it return, so each
+	// direction unblocks the other when its source ends. once guards against a
+	// double close racing the f.done watcher.
+	var closeOnce sync.Once
+	unblock := func() {
+		closeOnce.Do(func() {
+			_ = local.Close()
+			_ = remote.Close()
+		})
+	}
+
+	// A forwarder close must also tear this pair down even if both directions are
+	// idle; this watcher exits when the pair finishes on its own.
+	pairDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(remote, local)
-		pipeDone <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(local, remote)
-		pipeDone <- struct{}{}
+		select {
+		case <-f.done:
+			unblock()
+		case <-pairDone:
+		}
 	}()
 
-	select {
-	case <-pipeDone:
-	case <-f.done:
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(remote, local)
+		unblock() // local closed its write half; drop remote so its read returns
+	}()
+	go func() {
+		defer wg.Done()
+		_, _ = io.Copy(local, remote)
+		unblock() // remote closed; drop local so its read returns
+	}()
+	wg.Wait()
+	close(pairDone)
 }
 
 // close stops accepting new connections, waits for in-flight forwards to drain,

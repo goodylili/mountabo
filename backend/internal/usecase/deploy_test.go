@@ -48,6 +48,22 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 	return nil
 }
 
+// DeleteByApp removes every saved deployment with the given app, reporting
+// whether any was removed, so the store doubles as a DeploymentDeleter in tests.
+func (f *fakeDeploymentStore) DeleteByApp(app string) (bool, error) {
+	kept := make([]Deployment, 0, len(f.saved))
+	removed := false
+	for _, d := range f.saved {
+		if d.App == app {
+			removed = true
+			continue
+		}
+		kept = append(kept, d)
+	}
+	f.saved = kept
+	return removed, nil
+}
+
 type fakeDeployKeyManager struct {
 	title     string
 	publicKey string

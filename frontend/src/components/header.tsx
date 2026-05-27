@@ -43,8 +43,9 @@ export function Header({
 
   return (
     <header className="shrink-0 border-b border-line">
-      {/* firm top bar, identical across all views */}
-      <div className="flex h-14 w-full items-center gap-3 px-4 text-[13px] sm:gap-5 sm:px-6 lg:px-8">
+      {/* firm top bar, identical across all views. The content is centered at the
+          same width as the page content so the logo aligns with it. */}
+      <div className="mx-auto flex h-14 w-full max-w-[1100px] items-center gap-3 px-4 text-[13px] sm:gap-5 sm:px-6 lg:px-8">
         <Link href="/" className="flex shrink-0 items-center gap-2 text-cream">
           <LogoMark className="text-lime" width={30} height={30} />
           <span className="text-lg font-bold tracking-tight">mountabo</span>
@@ -101,9 +102,12 @@ export function Header({
         </div>
       </div>
 
-      {/* controls row below the header: per-page status, breadcrumbs, and back */}
+      {/* controls row below the header: per-page status, breadcrumbs, and back.
+          The divider spans full width; the content is centered to align with the
+          page content, matching the top bar. */}
       {showControls && (
-        <div className="flex h-11 w-full items-center gap-3 border-t border-line px-4 text-[13px] text-muted sm:gap-4 sm:px-6 lg:px-8">
+        <div className="border-t border-line">
+        <div className="mx-auto flex h-11 w-full max-w-[1100px] items-center gap-3 px-4 text-[13px] text-muted sm:gap-4 sm:px-6 lg:px-8">
           <span className="hidden items-center gap-2 rounded-md border border-line bg-surface px-2.5 py-1 md:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-blue" />
             localhost:7777
@@ -136,6 +140,7 @@ export function Header({
               </kbd>
             </div>
           )}
+        </div>
         </div>
       )}
     </header>

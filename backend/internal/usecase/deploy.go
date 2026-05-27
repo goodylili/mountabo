@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -247,6 +248,7 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		Environment:  env,
 		ServerID:     in.ServerID,
 		WorkflowFile: fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch),
+		Port:         primaryPort(in.Ports),
 		CreatedAt:    time.Now().UTC(),
 	}
 	if err := s.history.Save(record); err != nil {
@@ -255,6 +257,19 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 
 	progress(out, "deploy configured, push to %s to trigger a %s deploy", in.Branch, cfg.Strategy)
 	return nil
+}
+
+// primaryPort is the app's main published host port, taken from the first
+// configured deploy port whose Value parses as a port number. It is recorded on
+// the deployment so a health check can probe 127.0.0.1:<port> on the server. 0
+// when no usable port is configured.
+func primaryPort(ports []DeployPort) int {
+	for _, p := range ports {
+		if n, err := strconv.Atoi(strings.TrimSpace(p.Value)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // validateDeploy checks the config fields common to preview and deploy.

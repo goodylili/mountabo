@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 // ConfirmAction is the single confirmation gate for everything mountabo runs on
 // a server. Nothing touches a server until the operator confirms here. It shows
@@ -19,6 +19,7 @@ export function ConfirmAction({
   loading = false,
   loadingHint = "loading the exact steps…",
   destructive = false,
+  requireTyping,
   onConfirm,
   onCancel,
 }: {
@@ -37,6 +38,10 @@ export function ConfirmAction({
   loadingHint?: string;
   // Tints the confirm button red for irreversible actions (delete, remove).
   destructive?: boolean;
+  // When set, confirm is gated behind typing this exact string (trimmed), the
+  // Vercel/GitHub "type the name to confirm" pattern. Omit it and the dialog
+  // behaves exactly as before (no input, confirm enabled once not loading).
+  requireTyping?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -51,6 +56,13 @@ export function ConfirmAction({
 
   const stepLines = Array.isArray(steps) ? steps : undefined;
   const stepBlock = typeof steps === "string" ? steps : undefined;
+
+  // When requireTyping is set, the operator must type it exactly (trimmed) to
+  // arm Confirm. Tracked locally so existing callers that omit it are untouched.
+  const [typed, setTyped] = useState("");
+  const typingGate = requireTyping !== undefined;
+  const typedMatches = typingGate && typed.trim() === requireTyping;
+  const confirmDisabled = loading || (typingGate && !typedMatches);
 
   return (
     <div
@@ -103,6 +115,25 @@ export function ConfirmAction({
               <p className="text-muted">n/a</p>
             )}
           </div>
+
+          {typingGate && (
+            <div className="mt-5">
+              <label className="label" htmlFor="confirm-typing">
+                type <span className="font-mono text-cream">{requireTyping}</span> to confirm
+              </label>
+              <input
+                id="confirm-typing"
+                type="text"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                placeholder={requireTyping}
+                className="mt-2 w-full rounded-lg border border-line bg-black/30 px-4 py-2.5 font-mono text-[13px] text-cream outline-none transition-colors focus:border-line-strong"
+              />
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line px-4 py-3 sm:px-5">
@@ -114,7 +145,7 @@ export function ConfirmAction({
           </button>
           <button
             onClick={onConfirm}
-            disabled={loading}
+            disabled={confirmDisabled}
             className={
               destructive
                 ? "rounded-md border border-red-400/50 bg-red-500/10 px-4 py-2 text-[12px] font-medium text-red-300 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"

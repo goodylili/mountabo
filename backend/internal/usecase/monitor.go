@@ -2,24 +2,34 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 )
 
+// ErrDeploymentNotFound is returned when no tracked deployment matches an app.
+var ErrDeploymentNotFound = errors.New("deployment not found")
+
 // Deployment is a repo+branch mountabo has configured to deploy to a server. It
 // is persisted on a successful deploy so the monitor can show its history.
 type Deployment struct {
-	ID           string    `json:"id"`
-	App          string    `json:"app"`
-	Owner        string    `json:"owner"`
-	Repo         string    `json:"repo"`
-	Branch       string    `json:"branch"`
-	Environment  string    `json:"environment"`
-	ServerID     string    `json:"serverId"`
-	WorkflowFile string    `json:"workflowFile"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID           string `json:"id"`
+	App          string `json:"app"`
+	Owner        string `json:"owner"`
+	Repo         string `json:"repo"`
+	Branch       string `json:"branch"`
+	Environment  string `json:"environment"`
+	ServerID     string `json:"serverId"`
+	WorkflowFile string `json:"workflowFile"`
+	// Port is the app's primary published host port on the server (the first
+	// configured deploy port), so a health check can probe 127.0.0.1:<port> over
+	// SSH. Zero when no port was configured (e.g. a compose stack with no host
+	// publish), in which case the health check falls back to the domain.
+	Port      int       `json:"port"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // DeploymentStore persists configured deployments (a JSON file today). Save
@@ -28,6 +38,29 @@ type Deployment struct {
 type DeploymentStore interface {
 	List() ([]Deployment, error)
 	Save(d Deployment) error
+}
+
+// DeploymentDeleter forgets a tracked deployment by its app name: it removes
+// the deployment record and its append-only event history, returning whether a
+// record existed to remove. It only drops mountabo's tracking; it never touches
+// the running app or the committed workflow.
+type DeploymentDeleter interface {
+	DeleteByApp(app string) (removed bool, err error)
+}
+
+// ContainerTeardown stops and removes an app's running container(s) on a server
+// over SSH (both a docker compose stack and a plain container named after the
+// app), so the app stops existing. It is best-effort: docker missing on the box
+// or no matching container is not an error.
+type ContainerTeardown interface {
+	RemoveApp(ctx context.Context, t SSHTarget, app string) error
+}
+
+// RepoFileDeleter removes a single file from a repo branch via the contents
+// API. A file that is already gone is treated as a no-op success, so tearing
+// down a deployment never fails on an already-removed file.
+type RepoFileDeleter interface {
+	DeleteFile(ctx context.Context, t Token, owner, repo, branch, path, message string) error
 }
 
 // WorkflowRun is one GitHub Actions run of a deploy workflow.
@@ -107,20 +140,143 @@ const (
 	monitorFetchLimit = 8 // concurrent per-deployment GitHub/DB fetches
 )
 
+// Deploy artifact repo paths a deployment commits, reconstructed on teardown to
+// remove them: the deploy script (repo root) and the per-branch workflow (under
+// .github/workflows by its stored file name).
+const (
+	teardownDeployScriptPath = "deploy.sh"
+	teardownWorkflowDir      = ".github/workflows/"
+)
+
 // MonitorService reports deploy history: the configured deployments enriched
 // with their recent GitHub Actions runs, read on the connected user's behalf.
+// It also tears a deployment down on request: stopping its container(s) on the
+// server, removing its committed deploy workflow, and forgetting its tracking.
 type MonitorService struct {
 	deployments DeploymentStore
 	events      DeployEventReader
+	deleter     DeploymentDeleter
 	tokens      TokenStore
 	runs        WorkflowRunLister
 	servers     ServerStore
+	vault       SecretVault
+	teardown    ContainerTeardown
+	repoFiles   RepoFileDeleter
+	log         *slog.Logger
 }
 
 // NewMonitorService wires the service to its ports. The server store is read to
-// derive each deployment's live app URL (its domain, or its IP).
-func NewMonitorService(deployments DeploymentStore, events DeployEventReader, tokens TokenStore, runs WorkflowRunLister, servers ServerStore) *MonitorService {
-	return &MonitorService{deployments: deployments, events: events, tokens: tokens, runs: runs, servers: servers}
+// derive each deployment's live app URL (its domain, or its IP) and to reach the
+// server on teardown; the vault holds the per-server key used to SSH in; the
+// teardown and repoFiles ports stop the container and remove the committed
+// workflow when a deployment is deleted; the deleter then forgets its tracking.
+func NewMonitorService(deployments DeploymentStore, events DeployEventReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, log *slog.Logger) *MonitorService {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &MonitorService{deployments: deployments, events: events, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, log: log}
+}
+
+// Delete tears a deployment down by its app name: it stops and removes the app's
+// container(s) on its server over SSH and deletes the committed deploy workflow
+// and deploy.sh from the repo, then forgets mountabo's tracking (the deployment
+// record and its append-only deploy history). The teardown is best-effort: its
+// failures are logged but never block removing the record, so a user is never
+// stuck with an undeletable deployment. ErrDeploymentNotFound is returned when
+// no tracked deployment has that app.
+func (s *MonitorService) Delete(ctx context.Context, app string) error {
+	// Load the record first so the teardown knows which server and repo files to
+	// reach. A missing record is the not-found case; a store read failure is real.
+	dep, found, err := s.lookup(app)
+	if err != nil {
+		return fmt.Errorf("look up deployment: %w", err)
+	}
+	if !found {
+		return ErrDeploymentNotFound
+	}
+
+	s.tearDown(ctx, dep)
+
+	removed, err := s.deleter.DeleteByApp(app)
+	if err != nil {
+		return fmt.Errorf("delete deployment: %w", err)
+	}
+	if !removed {
+		// The record vanished between the lookup and the delete (a concurrent
+		// delete); treat it as already gone.
+		return ErrDeploymentNotFound
+	}
+	return nil
+}
+
+// lookup finds the tracked deployment for app. found is false when no deployment
+// has that app.
+func (s *MonitorService) lookup(app string) (Deployment, bool, error) {
+	deployments, err := s.deployments.List()
+	if err != nil {
+		return Deployment{}, false, fmt.Errorf("list deployments: %w", err)
+	}
+	for _, d := range deployments {
+		if d.App == app {
+			return d, true, nil
+		}
+	}
+	return Deployment{}, false, nil
+}
+
+// tearDown stops the app's container(s) on its server and removes its committed
+// deploy workflow + deploy.sh from the repo. Every step is best-effort: each
+// failure is logged and the rest still run, so a partial teardown never blocks
+// forgetting the record. A server that is not set up, or a token that cannot be
+// loaded, simply skips the step it gates.
+func (s *MonitorService) tearDown(ctx context.Context, dep Deployment) {
+	s.removeContainer(ctx, dep)
+	s.removeWorkflowFiles(ctx, dep)
+}
+
+// removeContainer SSHes into the deployment's server as the mountabo user and
+// removes the app's container(s). It is skipped (with a log) when the server
+// cannot be resolved, is not set up, or its key cannot be loaded.
+func (s *MonitorService) removeContainer(ctx context.Context, dep Deployment) {
+	server, err := s.servers.Get(dep.ServerID)
+	if err != nil {
+		s.log.Warn("teardown: skip container removal, server unavailable", "app", dep.App, "serverId", dep.ServerID, "err", err)
+		return
+	}
+	if server.Status != StatusReady {
+		s.log.Warn("teardown: skip container removal, server not set up", "app", dep.App, "serverId", dep.ServerID)
+		return
+	}
+	key, err := s.vault.LoadSecret(privateKeyKey(dep.ServerID))
+	if err != nil {
+		s.log.Warn("teardown: skip container removal, key unavailable", "app", dep.App, "serverId", dep.ServerID, "err", err)
+		return
+	}
+	t := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
+	if err := s.teardown.RemoveApp(ctx, t, dep.App); err != nil {
+		s.log.Warn("teardown: remove app container failed", "app", dep.App, "serverId", dep.ServerID, "err", err)
+	}
+}
+
+// removeWorkflowFiles deletes the deployment's committed deploy workflow and
+// deploy.sh from the repo, so a future push has no deploy workflow to run. It is
+// skipped (with a log) when no GitHub token is stored; each file is deleted
+// independently so one missing file does not stop the other.
+func (s *MonitorService) removeWorkflowFiles(ctx context.Context, dep Deployment) {
+	token, err := s.tokens.Load()
+	if err != nil {
+		s.log.Warn("teardown: skip workflow removal, github token unavailable", "app", dep.App, "err", err)
+		return
+	}
+	paths := []string{teardownDeployScriptPath}
+	if dep.WorkflowFile != "" {
+		paths = append(paths, teardownWorkflowDir+dep.WorkflowFile)
+	}
+	for _, path := range paths {
+		if err := s.repoFiles.DeleteFile(ctx, token, dep.Owner, dep.Repo, dep.Branch, path, "mountabo: remove deploy on teardown"); err != nil {
+			s.log.Warn("teardown: delete repo file failed", "app", dep.App, "repo", dep.Owner+"/"+dep.Repo, "path", path, "err", err)
+		}
+	}
 }
 
 // History lists every configured deployment with its recent runs. It returns

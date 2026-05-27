@@ -17,6 +17,7 @@ import {
   GithubMark,
   Refresh,
   Terminal,
+  Trash,
 } from "@/components/icons";
 import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
 import type { Domain, ServerView, SetupOption } from "@/lib/servers";
@@ -40,6 +41,7 @@ import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetc
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
+import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -76,6 +78,35 @@ export function MonitorView({
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const serverById = new Map(serverList.map((s) => [s.id, s]));
+
+  // App health per deployment (keyed by app): undefined = not probed yet, null =
+  // could not reach the backend (unknown), otherwise the probe result.
+  const [health, setHealth] = useState<Record<string, AppHealth | null>>({});
+  // The delete confirmation gate (the open deployment to forget), and the set of
+  // apps already dropped locally so their cards disappear immediately on delete.
+  const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
+  const [deletedApps, setDeletedApps] = useState<Set<string>>(new Set());
+  const visibleDeployments = deployments.filter((d) => !deletedApps.has(d.app));
+
+  // Probe the open deployment's health on demand (no daemon), keyed by app so it
+  // is fetched once per open until a refresh clears the cache. setState only runs
+  // in the resolved callback, never synchronously in the effect body.
+  useEffect(() => {
+    if (!open || open in health) return;
+    const ctrl = new AbortController();
+    fetchAppHealth(open, ctrl.signal).then((h) => setHealth((prev) => ({ ...prev, [open]: h })));
+    return () => ctrl.abort();
+  }, [open, health]);
+
+  // confirmDeployDelete forgets a deployment's tracking, drops its card locally,
+  // then refreshes to re-pull authoritative state. Runs from an event handler.
+  async function confirmDeployDelete(app: string) {
+    setConfirmDelete(null);
+    const ok = await deleteDeployment(app);
+    if (!ok) return;
+    setDeletedApps((prev) => new Set(prev).add(app));
+    startRefresh(() => router.refresh());
+  }
 
   const optionName = useCallback(
     (id: string) => catalog.find((o) => o.id === id)?.name ?? id,
@@ -116,8 +147,8 @@ export function MonitorView({
   // the fetch was attempted but returned nothing.
   const [previewState, setPreviewState] = useState<{ host: string; data: DomainPreview | null } | null>(null);
 
-  const liveCount = deployments.filter((d) => d.status === "live").length;
-  const openDeployment = deployments.find((d) => d.app === open);
+  const liveCount = visibleDeployments.filter((d) => d.status === "live").length;
+  const openDeployment = visibleDeployments.find((d) => d.app === open);
   const openServerId = openDeployment?.serverId ?? "";
 
   // Read the open deployment's server metrics on demand (no daemon), keyed by
@@ -157,6 +188,7 @@ export function MonitorView({
 
   function refresh() {
     setMetrics({}); // drop cached metrics so the open server re-reads
+    setHealth({}); // drop cached health so the open app is re-probed
     startRefresh(() => router.refresh()); // re-pull deployments + their runs
   }
 
@@ -221,44 +253,45 @@ export function MonitorView({
         className="rise mt-10 flex items-center gap-6 border-y border-line py-6 text-[13px] sm:gap-10"
         style={{ animationDelay: "70ms" }}
       >
-        <Summary value={String(deployments.length)} label="apps" />
+        <Summary value={String(visibleDeployments.length)} label="apps" />
         <span className="h-10 w-px bg-line" />
         <Summary value={String(liveCount)} label="live" tone="blue" />
         <span className="h-10 w-px bg-line" />
         <Summary
-          value={String(deployments.length - liveCount)}
+          value={String(visibleDeployments.length - liveCount)}
           label="needs attention"
-          tone={deployments.length - liveCount > 0 ? "red" : "muted"}
+          tone={visibleDeployments.length - liveCount > 0 ? "red" : "muted"}
         />
       </div>
 
       <div className="rise mt-8 flex flex-col gap-5" style={{ animationDelay: "120ms" }}>
-        {deployments.length === 0 && (
+        {visibleDeployments.length === 0 && (
           <p className="rounded-2xl border border-dashed border-line px-6 py-16 text-center text-[14px] text-muted">
             nothing deployed yet. connect a repository to a server and your live status shows up here.
           </p>
         )}
-        {deployments.map((d) => {
+        {visibleDeployments.map((d) => {
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;
           const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
           const latest = d.runs[0];
           const picked = monitoringPick[d.serverId] ?? [];
           return (
-            <section key={d.app} className="overflow-hidden rounded-2xl border border-line bg-surface">
+            <section key={d.app} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
               <button
                 onClick={() => setOpen(isOpen ? "" : d.app)}
-                className="flex w-full items-center gap-4 px-6 py-5 text-left"
+                className="flex w-full items-center gap-4 px-6 py-5 pr-16 text-left"
                 aria-expanded={isOpen}
               >
                 <ChevronRight className={`text-muted transition-transform ${isOpen ? "rotate-90" : ""}`} />
                 {server && <ServerAvatar seed={server.name} />}
                 <div className="min-w-0 flex-1">
-                  <span className="flex items-center gap-3">
+                  <span className="flex flex-wrap items-center gap-3">
                     <span className="text-[18px] font-semibold text-cream">{d.app}</span>
                     <Badge tone={statusTone[d.status]} dot>
                       {d.status}
                     </Badge>
+                    <HealthPill health={health[d.app]} />
                     {latest && <LatestRunPill status={latest.status} />}
                   </span>
                   <span className="mt-1.5 block truncate text-[13px] text-muted">
@@ -277,6 +310,7 @@ export function MonitorView({
                   deployment={d}
                   server={server}
                   metrics={m}
+                  health={health[d.app]}
                   picked={picked}
                   onPick={(ids) => setMonitoringPick((p) => ({ ...p, [d.serverId]: ids }))}
                   onApplyMonitoring={(server, desired, adding) =>
@@ -288,6 +322,7 @@ export function MonitorView({
                   onRemoveDomain={(server, host) =>
                     setConfirmDomain({ server, mode: "remove", host })
                   }
+                  onDelete={() => setConfirmDelete(d)}
                   optionName={optionName}
                 />
               )}
@@ -433,7 +468,110 @@ export function MonitorView({
           onCancel={() => setConfirmDomain(null)}
         />
       )}
+
+      {/* Delete a deployment: type-to-confirm, honest about what it does and
+          does not do. It only removes mountabo's local tracking. */}
+      {confirmDelete && (
+        <ConfirmAction
+          title={`delete ${confirmDelete.app}`}
+          subtitle="tear this deployment down"
+          destructive
+          requireTyping={confirmDelete.app}
+          summary={
+            <>
+              this tears down <span className="text-cream">{confirmDelete.app}</span>. mountabo stops and
+              removes its running container on{" "}
+              <span className="text-cream">{serverById.get(confirmDelete.serverId)?.name ?? confirmDelete.serverId}</span>,
+              deletes the deploy workflow from{" "}
+              <span className="text-cream">{confirmDelete.repo}</span> so a future push no longer deploys it,
+              and forgets the deployment record and its history. this cannot be undone. type the app name to
+              confirm.
+            </>
+          }
+          stepsLabel="what deleting does"
+          steps={[
+            `stop and remove the running container for ${confirmDelete.app} on ${serverById.get(confirmDelete.serverId)?.name ?? confirmDelete.serverId}`,
+            `delete the deploy workflow and deploy.sh from ${confirmDelete.repo} so it no longer deploys`,
+            "remove the deployment record and its append-only history from mountabo",
+          ]}
+          confirmLabel="delete deployment"
+          onConfirm={() => void confirmDeployDelete(confirmDelete.app)}
+          onCancel={() => setConfirmDelete(null)}
+        />
+      )}
     </main>
+  );
+}
+
+// HealthPill is the prominent up/down indicator on a deployment card, from the
+// SSH-based app probe. undefined while it is still being read, null when the
+// probe could not reach the backend (shown as "health unknown"). Otherwise it
+// shows healthy (any HTTP response) or unhealthy (no response), with the HTTP
+// status when there is one.
+function HealthPill({ health }: { health: AppHealth | null | undefined }) {
+  if (health === undefined) {
+    return <Badge tone="gray">checking health</Badge>;
+  }
+  if (health === null) {
+    return <Badge tone="gray">health unknown</Badge>;
+  }
+  if (health.reachable) {
+    return (
+      <Badge tone="blue" dot>
+        healthy{health.status ? ` · ${health.status}` : ""}
+      </Badge>
+    );
+  }
+  return (
+    <Badge tone="red" dot>
+      unhealthy{health.status ? ` · ${health.status}` : ""}
+    </Badge>
+  );
+}
+
+// HealthBanner is the prominent app-health read inside the open card: a clear
+// healthy/unhealthy state, what was probed, and an honest "unknown" when the
+// probe could not reach the backend. It is the SSH up/down indicator; the
+// embedded Uptime Kuma dashboard is the detailed view.
+function HealthBanner({ health }: { health: AppHealth | null | undefined }) {
+  if (health === undefined) {
+    return (
+      <div className="mt-6 flex items-center gap-3 rounded-xl border border-line bg-surface/40 px-5 py-4">
+        <CircleDot className="animate-pulse text-muted" />
+        <span className="text-[14px] text-muted">checking whether the app is responding, over ssh…</span>
+      </div>
+    );
+  }
+  if (health === null) {
+    return (
+      <div className="mt-6 flex items-center gap-3 rounded-xl border border-line bg-surface/40 px-5 py-4">
+        <CircleDot className="text-muted" />
+        <span className="text-[14px] text-muted">
+          app health is unknown. mountabo could not probe the app (the server may not be set up, or is
+          unreachable).
+        </span>
+      </div>
+    );
+  }
+  if (health.reachable) {
+    return (
+      <div className="mt-6 flex items-center gap-3 rounded-xl border border-blue/30 bg-blue/[0.06] px-5 py-4">
+        <CircleCheck className="text-blue" />
+        <span className="text-[14px] text-cream">
+          app is healthy{health.status ? ` (http ${health.status})` : ""}
+          {health.target && <span className="text-muted"> · {health.target}</span>}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-6 flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/[0.06] px-5 py-4">
+      <CircleX className="text-red-400" />
+      <span className="text-[14px] text-cream">
+        app is not responding{health.status ? ` (http ${health.status})` : ""}
+        {health.detail && <span className="text-muted"> · {health.detail}</span>}
+      </span>
+    </div>
   );
 }
 
@@ -444,21 +582,25 @@ function ExpandedCard({
   deployment: d,
   server,
   metrics: m,
+  health,
   picked,
   onPick,
   onApplyMonitoring,
   onAddDomain,
   onRemoveDomain,
+  onDelete,
   optionName,
 }: {
   deployment: Deployment;
   server?: ServerView;
   metrics: ServerMetrics | null | undefined;
+  health: AppHealth | null | undefined;
   picked: string[];
   onPick: (ids: string[]) => void;
   onApplyMonitoring: (server: ServerView, desired: string[], adding: string[]) => void;
   onAddDomain: (server: ServerView, value: DomainFormValue) => void;
   onRemoveDomain: (server: ServerView, host: string) => void;
+  onDelete: () => void;
   optionName: (id: string) => string;
 }) {
   const latest = d.runs[0];
@@ -526,6 +668,10 @@ function ExpandedCard({
           )}
         </div>
       </div>
+
+      {/* app health: a prominent up/down read, probed from the server over SSH.
+          The embedded Uptime Kuma dashboard below is the detailed view. */}
+      <HealthBanner health={health} />
 
       <div className="mt-8 space-y-4">
         {/* host metrics */}
@@ -647,6 +793,26 @@ function ExpandedCard({
             </ul>
           </CollapsibleSection>
         )}
+
+        {/* danger zone: deleting tears the deployment down, so it gets its own
+            bordered section at the bottom of the card rather than a small icon. */}
+        <div className="mt-2 rounded-xl border border-red-400/30 bg-red-400/[0.03] p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[15px] font-medium text-cream">delete this deployment</p>
+              <p className="mt-1 max-w-xl text-[13px] leading-6 text-muted">
+                stops and removes the running container, disables the deploy workflow on the repo,
+                and forgets the record. this cannot be undone.
+              </p>
+            </div>
+            <button
+              onClick={onDelete}
+              className="flex shrink-0 items-center gap-2 rounded-md border border-red-400/50 px-4 py-2 text-[13px] font-medium text-red-300 transition-colors hover:bg-red-400/10"
+            >
+              <Trash /> delete deployment
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

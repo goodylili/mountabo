@@ -101,9 +101,17 @@ func run() error {
 
 	// Compose the monitor: configured deployments (SQLite store) enriched with
 	// their GitHub Actions runs (github), read with the keychain token, and the
-	// server store so each deployment can surface its live app URL.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, keyStore, ghClient, serverStore)
-	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
+	// server store so each deployment can surface its live app URL. Deleting a
+	// deployment is a real teardown: ssh stops and removes the app's container(s)
+	// on its server (keychain key), github removes the committed deploy workflow +
+	// deploy.sh from the repo (keychain token), and the SQLite store then forgets
+	// its tracking. Teardown is best-effort and logged.
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, deploymentStore, keyStore, ghClient, serverStore, keyStore, sshClient, ghClient, logger)
+	// App health: probe whether a deployed app is responding by curling it from
+	// its own server over SSH (the same ssh.Client + server store + keychain key
+	// the metrics/logs services use), so the card shows real up/down status.
+	appHealthSvc := usecase.NewAppHealthService(deploymentStore, serverStore, keyStore, sshClient)
+	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, appHealthSvc, logger)
 
 	// Compose the terminal page: run a single operator command on a set-up server
 	// over SSH (the same ssh.Client + server store + keychain key the read-only

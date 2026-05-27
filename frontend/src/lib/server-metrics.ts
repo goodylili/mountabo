@@ -14,13 +14,21 @@ export type ServerMetrics = {
 // failure (server not set up, unreachable) so the monitor falls back to "n/a".
 export async function fetchServerMetrics(serverId: string, signal?: AbortSignal): Promise<ServerMetrics | null> {
   if (!serverId) return null;
-  try {
-    const resp = await fetch(`/api/servers/${serverId}/metrics`, { cache: "no-store", signal });
-    if (!resp.ok) return null;
-    return (await resp.json()) as ServerMetrics;
-  } catch {
-    return null;
+  // The metrics are read over SSH on demand and can fail transiently (a cold
+  // backend on first paint, a brief connection hiccup), which would otherwise
+  // leave the card showing n/a on load. Retry a couple of times with a short
+  // backoff so a transient miss does not stick. A 401 (not connected) is final.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await fetch(`/api/servers/${serverId}/metrics`, { cache: "no-store", signal });
+      if (resp.status === 401) return null;
+      if (resp.ok) return (await resp.json()) as ServerMetrics;
+    } catch {
+      if (signal?.aborted) return null;
+    }
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
   }
+  return null;
 }
 
 // Formatting helpers for the monitor.

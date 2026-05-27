@@ -23,6 +23,7 @@ func TestDeploymentSQL_UpsertsStateAndTracksEvents(t *testing.T) {
 	first := usecase.Deployment{
 		ID: "d1", App: "shop", Owner: "acme", Repo: "shop", Branch: "main",
 		Environment: "main", ServerID: "s1", WorkflowFile: "mountabo-deploy-main.yml",
+		Port:      8080,
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	if err := store.Save(first); err != nil {
@@ -53,6 +54,9 @@ func TestDeploymentSQL_UpsertsStateAndTracksEvents(t *testing.T) {
 	if got.ServerID != "s2" {
 		t.Errorf("serverID = %q, want updated to s2", got.ServerID)
 	}
+	if got.Port != 8080 {
+		t.Errorf("port = %d, want 8080 persisted", got.Port)
+	}
 	if !got.CreatedAt.Equal(first.CreatedAt) {
 		t.Errorf("createdAt = %v, want the original first-deploy time", got.CreatedAt)
 	}
@@ -64,5 +68,24 @@ func TestDeploymentSQL_UpsertsStateAndTracksEvents(t *testing.T) {
 	}
 	if events != 2 {
 		t.Errorf("deploy_events = %d, want 2", events)
+	}
+
+	// Deleting by app removes the state row and its whole event history, and
+	// reports that something was removed; deleting an unknown app reports false.
+	removed, err := store.DeleteByApp("shop")
+	if err != nil || !removed {
+		t.Fatalf("DeleteByApp(shop): removed=%v err=%v", removed, err)
+	}
+	if list, err := store.List(); err != nil || len(list) != 0 {
+		t.Fatalf("after delete: list=%v err=%v", list, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM deploy_events`).Scan(&events); err != nil {
+		t.Fatalf("count events after delete: %v", err)
+	}
+	if events != 0 {
+		t.Errorf("deploy_events after delete = %d, want 0", events)
+	}
+	if removed, err := store.DeleteByApp("missing"); err != nil || removed {
+		t.Errorf("DeleteByApp(missing): removed=%v err=%v, want false/nil", removed, err)
 	}
 }
