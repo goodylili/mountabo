@@ -5,6 +5,7 @@ import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { RepoTreePicker } from "@/components/repo-tree-picker";
 import { StreamLog } from "@/components/stream-log";
+import { ConfirmAction } from "@/components/confirm-action";
 import { GithubMark, Plus, Branch as BranchIcon } from "@/components/icons";
 import type { Server, Source } from "@/lib/data";
 import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
@@ -147,6 +148,10 @@ export function ConfigureView({
   // live deploy stream is shown. Stable so the stream runs exactly once.
   const [deployBody, setDeployBody] = useState<PreviewRequest | null>(null);
   const [deployed, setDeployed] = useState(false);
+  // Set when the operator clicks deploy: opens the confirmation gate first. The
+  // deploy only runs (deployBody is set) once they confirm, so nothing reaches
+  // the repository or server unseen.
+  const [confirmDeploy, setConfirmDeploy] = useState<PreviewRequest | null>(null);
 
   // Any non-empty env var key that isn't a valid name blocks deploy.
   const envInvalid = envVars.some((v) => {
@@ -420,7 +425,7 @@ export function ConfigureView({
         <div className="mt-8">
           <button
             disabled={!preview || envInvalid}
-            onClick={() => setDeployBody(previewReq)}
+            onClick={() => setConfirmDeploy(previewReq)}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-6 py-4 font-bold text-lime transition-colors hover:bg-lime/20 disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-2 disabled:text-muted"
             title={
               envInvalid
@@ -439,6 +444,39 @@ export function ConfigureView({
           {previewError && <p className="mt-2 text-center text-[11px] text-red-300">{previewError}</p>}
         </div>
       </div>
+
+      {confirmDeploy && (
+        <ConfirmAction
+          title={`deploy ${app.trim() || source.name}`}
+          subtitle={`${source.owner}/${source.name} → ${server.name}`}
+          summary={
+            <>
+              mountabo will commit the workflow and deploy script below to{" "}
+              <span className="text-cream">
+                {source.owner}/{source.name}
+              </span>{" "}
+              on the <span className="text-cream">{branch}</span> branch and set{" "}
+              {preview?.secrets.length ?? 0} encrypted Actions secrets. when the workflow runs it
+              connects to <span className="text-cream">{server.name}</span> over SSH and runs the
+              deploy script in <span className="text-cream">{deployDir}</span>. nothing runs until you
+              confirm.
+            </>
+          }
+          stepsLabel="exact files and script that will be written, then run on the server"
+          steps={
+            preview
+              ? `# ${preview.workflowPath}\n${preview.workflow}\n\n# deploy.sh\n${preview.deployScript}\n\n# Actions secrets set on ${source.owner}/${source.name}\n${preview.secrets.map((s) => `${s.name}  (${s.managed ? "auto" : "your value"})`).join("\n")}`
+              : undefined
+          }
+          loading={!preview}
+          confirmLabel="commit and deploy"
+          onConfirm={() => {
+            setDeployBody(confirmDeploy);
+            setConfirmDeploy(null);
+          }}
+          onCancel={() => setConfirmDeploy(null)}
+        />
+      )}
 
       {deployBody && (
         <StreamLog

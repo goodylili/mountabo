@@ -23,8 +23,10 @@ import { ServerOptions } from "@/components/server-options";
 import { ServerDomains, type DomainFormValue } from "@/components/server-domains";
 import { ServerSelect } from "@/components/server-select";
 import { StreamLog } from "@/components/stream-log";
+import { ConfirmAction } from "@/components/confirm-action";
 import type { Source } from "@/lib/data";
 import { clearCachedRepos, fetchRepos, readCachedRepos, writeCachedRepos } from "@/lib/repo-cache";
+import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import type { Domain, ServerStatus, ServerView, SetupOption } from "@/lib/servers";
 
 const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
@@ -74,10 +76,33 @@ export function NewDeployment({
     | { server: ServerView; mode: "remove"; host: string }
     | null
   >(null);
+  // Confirmation gates: every server-touching action opens one of these first
+  // and only fires (sets the matching *Target above, or runs the delete) once
+  // the operator confirms. Nothing reaches a server unconfirmed.
+  const [confirmSetup, setConfirmSetup] = useState<ServerView | null>(null);
+  const [confirmApply, setConfirmApply] = useState<{
+    server: ServerView;
+    desired: string[];
+    params: Record<string, Record<string, string>>;
+  } | null>(null);
+  const [confirmDomain, setConfirmDomain] = useState<
+    | { server: ServerView; mode: "add"; value: DomainFormValue }
+    | { server: ServerView; mode: "remove"; host: string }
+    | null
+  >(null);
+  // The fetched add-domain preview (nginx config + script) for the open gate,
+  // and a flag while it loads. Removing a domain needs no preview.
+  const [domainPreview, setDomainPreview] = useState<DomainPreview | null>(null);
+  const [domainPreviewLoading, setDomainPreviewLoading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<ServerView | null>(null);
 
   function setServerStatus(id: string, status: ServerStatus) {
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
   }
+
+  // Resolves a hardening option id to its catalog display name for the apply
+  // confirmation, falling back to the id when the catalog hasn't loaded.
+  const optionName = (id: string) => catalog.find((o) => o.id === id)?.name ?? id;
 
   // After a successful apply, update the server's options AND append a change
   // event locally so the history timeline and undo stay current without a refetch.
@@ -120,6 +145,20 @@ export function NewDeployment({
         s.id === target.id ? { ...s, domains: (s.domains ?? []).filter((d) => d.host !== host) } : s,
       ),
     );
+  }
+
+  // Removes the server: destroys its keychain secrets (mountabo key + any
+  // retained root password) on the backend, then drops it from the list. Only
+  // ever called from the confirmation gate. Clears the selection if it was this
+  // server so the deploy bar doesn't point at a server that no longer exists.
+  async function deleteServer(target: ServerView) {
+    try {
+      await fetch(`/api/servers/${target.id}`, { method: "DELETE" });
+    } catch {
+      // best effort; the list still drops it so the operator isn't stuck
+    }
+    setServerList((list) => list.filter((s) => s.id !== target.id));
+    setServer((cur) => (cur === target.id ? null : cur));
   }
 
   // Load repositories on mount: serve a fresh cache instantly, otherwise fetch
@@ -211,6 +250,30 @@ export function NewDeployment({
       active = false;
     };
   }, []);
+
+  // When the add-domain gate opens, fetch the exact nginx config + script the
+  // backend would write, so the operator sees precisely what will run before
+  // anything touches the server. Removing a domain needs no preview.
+  useEffect(() => {
+    if (!confirmDomain || confirmDomain.mode !== "add") {
+      setDomainPreview(null);
+      setDomainPreviewLoading(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    setDomainPreview(null);
+    setDomainPreviewLoading(true);
+    fetchDomainPreview(confirmDomain.value, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return;
+        if (!("error" in res)) setDomainPreview(res);
+      })
+      .catch(() => {}) // includes AbortError; the gate falls back to a step list
+      .finally(() => {
+        if (!ctrl.signal.aborted) setDomainPreviewLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [confirmDomain]);
 
   // ⌘K / ctrl-K focuses the palette; Enter continues when both are picked.
   useEffect(() => {
@@ -538,27 +601,36 @@ export function NewDeployment({
                       <span className="text-[12px] text-blue">✓ ready</span>
                     ) : (
                       <button
-                        onClick={() => setSetupTarget(s)}
+                        onClick={() => setConfirmSetup(s)}
                         disabled={s.status === "setting_up"}
                         className="rounded-md border border-lime/40 px-3 py-1.5 text-[12px] text-lime transition-colors hover:bg-lime/10 disabled:opacity-50"
                       >
                         {s.status === "failed" ? "retry setup" : s.status === "setting_up" ? "setting up…" : "set up"}
                       </button>
                     )}
+                    <button
+                      onClick={() => setConfirmDelete(s)}
+                      disabled={s.status === "setting_up"}
+                      title={`remove ${s.name} from mountabo`}
+                      aria-label={`remove ${s.name}`}
+                      className="shrink-0 rounded-md border border-line px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:border-red-400/50 hover:text-red-300 disabled:opacity-50"
+                    >
+                      <Trash />
+                    </button>
                   </div>
                   {active && s.status === "ready" && (
                     <>
                       <ServerDomains
                         key={`dom:${(s.domains ?? []).map((d) => d.host).join(",")}`}
                         server={s}
-                        onAdd={(value) => setDomainTarget({ server: s, mode: "add", value })}
-                        onRemove={(host) => setDomainTarget({ server: s, mode: "remove", host })}
+                        onAdd={(value) => setConfirmDomain({ server: s, mode: "add", value })}
+                        onRemove={(host) => setConfirmDomain({ server: s, mode: "remove", host })}
                       />
                       <ServerOptions
                         key={`${s.id}:${(s.options ?? []).join(",")}`}
                         server={s}
                         catalog={catalog}
-                        onApply={(desired, params) => setApplyTarget({ server: s, desired, params })}
+                        onApply={(desired, params) => setConfirmApply({ server: s, desired, params })}
                       />
                     </>
                   )}
@@ -678,6 +750,173 @@ export function NewDeployment({
           else recordDomainRemove(domainTarget.server, domainTarget.host);
         }}
         onClose={() => setDomainTarget(null)}
+      />
+    )}
+
+    {/* Confirmation gates: each opens before the matching action runs, and only
+        a confirm sets the *Target (or runs the delete) that touches the server. */}
+    {confirmSetup && (
+      <ConfirmAction
+        title={`set up ${confirmSetup.name}`}
+        subtitle={confirmSetup.ip}
+        summary={
+          <>
+            mountabo will connect to <span className="text-cream">{confirmSetup.ip}</span> as root once
+            and prepare it for deployments. it creates an unprivileged{" "}
+            <span className="text-cream">mountabo</span> user, generates and installs a dedicated
+            ed25519 deploy key, and applies the base hardening. you can add or remove hardening later.
+            nothing runs until you confirm.
+          </>
+        }
+        steps={[
+          "connect to the server as root over SSH using the password you provided",
+          "create the unprivileged mountabo user with sudo and a locked password",
+          "generate an ed25519 deploy key and install its public key for the mountabo user",
+          "store the private key in your OS keychain, never on the server beyond its authorized_keys",
+          "apply the base hardening and confirm mountabo can log in with the new key",
+        ]}
+        confirmLabel={confirmSetup.status === "failed" ? "retry setup" : "set up server"}
+        onConfirm={() => {
+          setSetupTarget(confirmSetup);
+          setConfirmSetup(null);
+        }}
+        onCancel={() => setConfirmSetup(null)}
+      />
+    )}
+
+    {confirmApply && (
+      <ConfirmAction
+        title={`apply settings to ${confirmApply.server.name}`}
+        subtitle={confirmApply.server.ip}
+        summary={(() => {
+          const prev = new Set(confirmApply.server.options ?? []);
+          const desired = new Set(confirmApply.desired);
+          const added = confirmApply.desired.filter((id) => !prev.has(id));
+          const removed = (confirmApply.server.options ?? []).filter((id) => !desired.has(id));
+          return (
+            <>
+              mountabo will connect to <span className="text-cream">{confirmApply.server.name}</span> as
+              the mountabo user (with sudo) and change its hardening:{" "}
+              {added.length > 0 && (
+                <span className="text-lime">install {added.map(optionName).join(", ")}</span>
+              )}
+              {added.length > 0 && removed.length > 0 && ", "}
+              {removed.length > 0 && (
+                <span className="text-muted">remove {removed.map(optionName).join(", ")}</span>
+              )}
+              {added.length === 0 && removed.length === 0 && "no changes"}. nothing runs until you
+              confirm.
+            </>
+          );
+        })()}
+        steps={(() => {
+          const prev = new Set(confirmApply.server.options ?? []);
+          const desired = new Set(confirmApply.desired);
+          const added = confirmApply.desired.filter((id) => !prev.has(id));
+          const removed = (confirmApply.server.options ?? []).filter((id) => !desired.has(id));
+          const lines = ["connect to the server as the mountabo user over SSH (with sudo)"];
+          for (const id of added) lines.push(`install and enable: ${optionName(id)}`);
+          for (const id of removed) lines.push(`disable and remove: ${optionName(id)}`);
+          return lines;
+        })()}
+        confirmLabel="apply settings"
+        onConfirm={() => {
+          setApplyTarget(confirmApply);
+          setConfirmApply(null);
+        }}
+        onCancel={() => setConfirmApply(null)}
+      />
+    )}
+
+    {confirmDomain && confirmDomain.mode === "add" && (
+      <ConfirmAction
+        title={`add ${confirmDomain.value.host}`}
+        subtitle={confirmDomain.server.ip}
+        summary={
+          <>
+            mountabo will configure <span className="text-cream">{confirmDomain.server.name}</span> to
+            front <span className="text-cream">{confirmDomain.value.host}</span> on https, proxying to
+            your app on port <span className="text-cream">{confirmDomain.value.upstream}</span>. it
+            installs nginx if needed, writes the vhost below, and obtains a Let&apos;s Encrypt
+            certificate over http, so the domain must already point at{" "}
+            <span className="text-cream">{confirmDomain.server.ip}</span>. nothing runs until you
+            confirm.
+          </>
+        }
+        loading={domainPreviewLoading}
+        steps={
+          domainPreview
+            ? `# ${domainPreview.sitePath} (http)\n${domainPreview.httpConfig}\n\n# ${domainPreview.sitePath} (https)\n${domainPreview.tlsConfig}\n\n# setup script\n${domainPreview.script}`
+            : domainPreviewLoading
+              ? undefined
+              : [
+                  "connect to the server as the mountabo user over SSH (with sudo)",
+                  "install nginx if it is not already present",
+                  `write the nginx vhost for ${confirmDomain.value.host}`,
+                  "obtain a Let's Encrypt certificate over http and enable https",
+                  "reload nginx so the domain serves over https",
+                ]
+        }
+        confirmLabel={`add ${confirmDomain.value.host}`}
+        onConfirm={() => {
+          setDomainTarget(confirmDomain);
+          setConfirmDomain(null);
+        }}
+        onCancel={() => setConfirmDomain(null)}
+      />
+    )}
+
+    {confirmDomain && confirmDomain.mode === "remove" && (
+      <ConfirmAction
+        title={`remove ${confirmDomain.host}`}
+        subtitle={confirmDomain.server.ip}
+        destructive
+        summary={
+          <>
+            mountabo will stop fronting <span className="text-cream">{confirmDomain.host}</span> on{" "}
+            <span className="text-cream">{confirmDomain.server.name}</span>: it removes the nginx vhost
+            and its certificate, then reloads nginx. your app keeps running on its local port. nothing
+            runs until you confirm.
+          </>
+        }
+        steps={[
+          "connect to the server as the mountabo user over SSH (with sudo)",
+          `remove the nginx vhost for ${confirmDomain.host}`,
+          "delete the Let's Encrypt certificate for the domain",
+          "reload nginx so it stops serving the domain",
+        ]}
+        confirmLabel="remove domain"
+        onConfirm={() => {
+          setDomainTarget(confirmDomain);
+          setConfirmDomain(null);
+        }}
+        onCancel={() => setConfirmDomain(null)}
+      />
+    )}
+
+    {confirmDelete && (
+      <ConfirmAction
+        title={`remove ${confirmDelete.name}`}
+        subtitle={confirmDelete.ip}
+        destructive
+        summary={
+          <>
+            mountabo will remove <span className="text-cream">{confirmDelete.name}</span> from mountabo
+            and destroy its stored secrets. this revokes mountabo&apos;s access to the server. it does
+            not stop or delete anything already deployed on the server itself. this cannot be undone.
+          </>
+        }
+        steps={[
+          "destroy the server's mountabo deploy key in your OS keychain",
+          "destroy any retained root password for the server in your OS keychain",
+          "delete the server from mountabo's records, along with its domains and history",
+        ]}
+        confirmLabel="remove server"
+        onConfirm={() => {
+          void deleteServer(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
       />
     )}
     </>
