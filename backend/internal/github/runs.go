@@ -3,11 +3,17 @@ package github
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 	gogithub "github.com/google/go-github/v88/github"
 )
+
+// maxJobLogBytes bounds how much of a job's log we read, so a runaway log can
+// never exhaust memory. Roughly the last few thousand lines of a normal deploy.
+const maxJobLogBytes = 2 << 20 // 2 MiB
 
 var (
 	_ usecase.WorkflowRunLister = (*Client)(nil)
@@ -87,6 +93,7 @@ func (c *Client) LatestRun(ctx context.Context, t usecase.Token, owner, repo, wo
 	steps.Jobs = make([]usecase.RunJob, 0, len(jobs.Jobs))
 	for _, j := range jobs.Jobs {
 		job := usecase.RunJob{
+			ID:         j.GetID(),
 			Name:       j.GetName(),
 			Status:     j.GetStatus(),
 			Conclusion: j.GetConclusion(),
@@ -104,6 +111,52 @@ func (c *Client) LatestRun(ctx context.Context, t usecase.Token, owner, repo, wo
 		steps.Jobs = append(steps.Jobs, job)
 	}
 	return steps, nil
+}
+
+// JobLog returns a single job's plain-text log split into lines, so the UI can
+// show what each step printed and why a step failed. GitHub serves job logs from
+// a short-lived signed URL; GetWorkflowJobLogs resolves that redirect and this
+// fetches the content directly (the URL is pre-signed, so the fetch carries no
+// auth header). The read is bounded by maxJobLogBytes.
+func (c *Client) JobLog(ctx context.Context, t usecase.Token, owner, repo string, jobID int64) ([]string, error) {
+	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
+	if err != nil {
+		return nil, fmt.Errorf("build github client: %w", err)
+	}
+
+	logURL, _, err := api.Actions.GetWorkflowJobLogs(ctx, owner, repo, jobID, 1)
+	if err != nil {
+		return nil, fmt.Errorf("get job %d logs: %w", jobID, err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, logURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("build job %d log request: %w", jobID, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch job %d logs: %w", jobID, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch job %d logs: status %d", jobID, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJobLogBytes))
+	if err != nil {
+		return nil, fmt.Errorf("read job %d logs: %w", jobID, err)
+	}
+	return logLines(string(body)), nil
+}
+
+// logLines splits raw log text into lines, dropping a single trailing blank.
+func logLines(out string) []string {
+	out = strings.ReplaceAll(out, "\r\n", "\n")
+	trimmed := strings.TrimRight(out, "\n")
+	if trimmed == "" {
+		return []string{}
+	}
+	return strings.Split(trimmed, "\n")
 }
 
 // firstLine keeps a commit/run title to its first line for a tidy one-line row.

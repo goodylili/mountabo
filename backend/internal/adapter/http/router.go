@@ -11,6 +11,7 @@ import nethttp "net/http"
 //	GET    /api/github/tree          list a repo's file tree (directory/file picker)
 //	GET    /api/github/env-example    variable names from a repo's .env.example
 //	GET    /api/github/run-steps     latest deploy run's jobs + steps (live status)
+//	GET    /api/github/job-logs      one job's full log (what each step printed)
 //	DELETE /api/github/token         forget the stored token
 //	POST   /api/servers              add a server (probe specs over SSH)
 //	GET    /api/servers              list added servers
@@ -33,6 +34,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/github/tree", gh.Tree)
 	mux.HandleFunc("GET /api/github/env-example", gh.EnvExample)
 	mux.HandleFunc("GET /api/github/run-steps", gh.RunSteps)
+	mux.HandleFunc("GET /api/github/job-logs", gh.JobLogs)
 	mux.HandleFunc("DELETE /api/github/token", gh.Disconnect)
 
 	mux.HandleFunc("POST /api/servers", sv.Add)

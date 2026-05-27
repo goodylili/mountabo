@@ -15,6 +15,7 @@ export type RunStep = {
 };
 
 export type RunJob = {
+  jobId: number;
   name: string;
   status: GithubStatus;
   conclusion: GithubConclusion;

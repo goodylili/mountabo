@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	nethttp "net/http"
+	"strconv"
 	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
@@ -266,6 +267,34 @@ func (h *GitHubHandler) RunSteps(w nethttp.ResponseWriter, r *nethttp.Request) {
 		steps.Jobs = []usecase.RunJob{}
 	}
 	h.writeJSON(w, nethttp.StatusOK, steps)
+}
+
+// JobLogs returns one job's plain-text log (split into lines) from the latest
+// deploy run, so the walkthrough can show what each step printed and what
+// failed. owner, repo and jobId are required. Not-connected is reported as 401.
+func (h *GitHubHandler) JobLogs(w nethttp.ResponseWriter, r *nethttp.Request) {
+	q := r.URL.Query()
+	owner, repo := q.Get("owner"), q.Get("repo")
+	jobID, _ := strconv.ParseInt(q.Get("jobId"), 10, 64)
+	if owner == "" || repo == "" || jobID == 0 {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner, repo or jobId")
+		return
+	}
+
+	lines, err := h.runSteps.JobLog(r.Context(), owner, repo, jobID)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("read job logs failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not read the job logs")
+		return
+	}
+
+	out := make([]string, 0, len(lines))
+	out = append(out, lines...)
+	h.writeJSON(w, nethttp.StatusOK, map[string][]string{"lines": out})
 }
 
 // Disconnect removes the stored token from the keychain.

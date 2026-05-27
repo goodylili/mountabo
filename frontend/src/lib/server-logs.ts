@@ -39,3 +39,29 @@ export function isLogHeader(line: string): boolean {
 export function logHeaderName(line: string): string {
   return line.replace(/^==> /, "").replace(/ <==$/, "");
 }
+
+// LOG_TS matches docker's leading RFC3339 timestamp (added by
+// `docker logs --timestamps`): a date, a time with optional fractional seconds,
+// and a UTC "Z" or numeric offset, followed by the rest of the line.
+const LOG_TS = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+([\s\S]*)$/;
+
+// splitLogTimestamp separates a line's leading timestamp from its message so the
+// viewer can lead with and emphasise the date and time. A line with no
+// recognisable timestamp (a wrapped continuation, or a header) comes back with
+// an empty ts and the whole line as text.
+export function splitLogTimestamp(line: string): { ts: string; text: string } {
+  const clean = line.startsWith("﻿") ? line.slice(1) : line; // GitHub job logs prefix a BOM
+  const m = LOG_TS.exec(clean);
+  if (!m) return { ts: "", text: clean };
+  return { ts: m[1], text: m[2] };
+}
+
+// formatLogTimestamp renders an ISO timestamp as "YYYY-MM-DD HH:MM:SS" in UTC,
+// to seconds, for a compact, readable date and time. Returns the raw value when
+// it cannot be parsed.
+export function formatLogTimestamp(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}

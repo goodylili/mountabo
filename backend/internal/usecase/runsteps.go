@@ -13,8 +13,10 @@ type RunStep struct {
 	Number     int    `json:"number"`
 }
 
-// RunJob is one job of the latest deploy run, with its ordered steps.
+// RunJob is one job of the latest deploy run, with its ordered steps. ID
+// identifies the job for fetching its full log.
 type RunJob struct {
+	ID         int64     `json:"jobId"`
 	Name       string    `json:"name"`
 	Status     string    `json:"status"`
 	Conclusion string    `json:"conclusion"`
@@ -32,13 +34,16 @@ type RunSteps struct {
 	Jobs       []RunJob `json:"jobs"`
 }
 
-// WorkflowJobLister reads the jobs and steps of a workflow run.
+// WorkflowJobLister reads the jobs and steps of a workflow run, and a single
+// job's full log.
 //
 // LatestRun finds the most recent run of workflowFile on branch and returns
 // that run with its jobs and their steps. A workflow with no run yet yields a
-// zero RunSteps and a nil error.
+// zero RunSteps and a nil error. JobLog returns one job's plain-text log split
+// into lines, so the UI can show what each step printed and why a step failed.
 type WorkflowJobLister interface {
 	LatestRun(ctx context.Context, t Token, owner, repo, workflowFile, branch string) (RunSteps, error)
+	JobLog(ctx context.Context, t Token, owner, repo string, jobID int64) ([]string, error)
 }
 
 // RunStepsService reports the latest deploy run's job/step progress on the
@@ -74,4 +79,22 @@ func (s *RunStepsService) Steps(ctx context.Context, owner, repo, ref string) (R
 		return RunSteps{}, fmt.Errorf("read run steps: %w", err)
 	}
 	return steps, nil
+}
+
+// JobLog returns one job's log lines for owner/repo, so the walkthrough can show
+// what each step printed and what failed. It returns ErrNotConnected when no
+// token is stored.
+func (s *RunStepsService) JobLog(ctx context.Context, owner, repo string, jobID int64) ([]string, error) {
+	if owner == "" || repo == "" || jobID == 0 {
+		return nil, fmt.Errorf("owner, repo and jobId are required")
+	}
+	token, err := s.tokens.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load token: %w", err)
+	}
+	lines, err := s.jobs.JobLog(ctx, token, owner, repo, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("read job log: %w", err)
+	}
+	return lines, nil
 }

@@ -12,12 +12,14 @@ var _ usecase.LogInspector = (*Client)(nil)
 
 // logsScript prints the recent logs of every running Docker container on the
 // box, each block headed by "==> <name> <==" so a multi-app server stays
-// readable. It runs as the mountabo user (a member of the docker group from
-// bootstrap), no sudo, and tails the same way regardless of whether the app was
-// deployed with docker compose or a plain docker run, both produce ordinary
-// containers that `docker logs` can read. When Docker is absent or no container
-// is running it prints a single explanatory line rather than failing, so the
-// caller always gets a clean answer.
+// readable. --timestamps prefixes every line with its RFC3339 UTC time, so the
+// viewer can lead with the date and time of each entry. It runs as the mountabo
+// user (a member of the docker group from bootstrap), no sudo, and tails the
+// same way regardless of whether the app was deployed with docker compose or a
+// plain docker run, both produce ordinary containers that `docker logs` can
+// read. When Docker is absent or no container is running it prints a single
+// explanatory line rather than failing, so the caller always gets a clean
+// answer.
 //
 // %d is the bounded tail count, substituted by the caller.
 const logsScript = `if ! command -v docker >/dev/null 2>&1; then
@@ -31,7 +33,7 @@ if [ -z "$names" ]; then
 fi
 for name in $names; do
   echo "==> $name <=="
-  docker logs --tail %d "$name" 2>&1 || echo "(could not read logs for $name)"
+  docker logs --timestamps --tail %d "$name" 2>&1 || echo "(could not read logs for $name)"
 done
 `
 

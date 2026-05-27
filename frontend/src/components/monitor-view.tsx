@@ -31,11 +31,13 @@ import {
 import {
   type GithubConclusion,
   type GithubStatus,
+  type RunJob,
   type RunSteps,
   fetchRunSteps,
   runActive,
 } from "@/lib/run-steps";
-import { isLogHeader, logHeaderName, fetchServerLogs } from "@/lib/server-logs";
+import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetchServerLogs } from "@/lib/server-logs";
+import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 
 const runColor: Record<RunStatus, string> = {
@@ -667,40 +669,124 @@ function RunWalkthrough({
       ) : (
         <div className="space-y-4">
           {steps.jobs.map((job, ji) => (
-            <div key={ji} className="overflow-hidden rounded-xl border border-line bg-surface">
-              <div className="flex items-center gap-3 border-b border-line px-5 py-3.5">
-                <StepIcon status={job.status} conclusion={job.conclusion} />
-                <span className="flex-1 text-[14px] font-medium text-cream">{job.name}</span>
-                <StepStatusLabel status={job.status} conclusion={job.conclusion} />
-                {job.htmlUrl && (
-                  <a
-                    href={job.htmlUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-muted transition-colors hover:text-cream"
-                    aria-label={`open job ${job.name} on github`}
-                  >
-                    <ExternalLink />
-                  </a>
-                )}
-              </div>
-              <ol className="divide-y divide-line">
-                {job.steps.map((s, si) => (
-                  <li key={si} className="flex items-center gap-3 px-5 py-2.5 text-[13px]">
-                    <StepIcon status={s.status} conclusion={s.conclusion} />
-                    <span className="flex-1 text-body">{s.name}</span>
-                    <StepStatusLabel status={s.status} conclusion={s.conclusion} />
-                  </li>
-                ))}
-                {job.steps.length === 0 && (
-                  <li className="px-5 py-2.5 text-[12.5px] text-muted">no steps reported yet</li>
-                )}
-              </ol>
-            </div>
+            <JobPanel key={job.jobId || ji} owner={owner} repo={repo} job={job} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+// JobPanel renders one job of the run: its steps with live status, and an
+// expandable log of what the job printed so the operator can read what worked
+// and what failed without leaving the page. A failed job opens by default so the
+// error is visible immediately. The log loads lazily the first time the panel
+// opens (and only setting state inside the resolved fetch, never synchronously
+// in the effect body).
+function JobPanel({ owner, repo, job }: { owner: string; repo: string; job: RunJob }) {
+  const failed = job.conclusion === "failure" || job.conclusion === "timed_out";
+  const [open, setOpen] = useState(failed);
+  const [log, setLog] = useState<string[] | null>(null); // null = not loaded, [] = loaded empty
+
+  useEffect(() => {
+    if (!open || log !== null || !job.jobId) return;
+    const ctrl = new AbortController();
+    fetchJobLogs(owner, repo, job.jobId, ctrl.signal).then((lines) => {
+      if (!ctrl.signal.aborted) setLog(lines);
+    });
+    return () => ctrl.abort();
+  }, [open, log, owner, repo, job.jobId]);
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-surface">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-3 border-b border-line px-5 py-3.5 text-left"
+        aria-expanded={open}
+      >
+        <ChevronRight className={`text-muted transition-transform ${open ? "rotate-90" : ""}`} />
+        <StepIcon status={job.status} conclusion={job.conclusion} />
+        <span className="flex-1 text-[14px] font-medium text-cream">{job.name}</span>
+        <StepStatusLabel status={job.status} conclusion={job.conclusion} />
+        {job.htmlUrl && (
+          <a
+            href={job.htmlUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-muted transition-colors hover:text-cream"
+            aria-label={`open job ${job.name} on github`}
+          >
+            <ExternalLink />
+          </a>
+        )}
+      </button>
+
+      <ol className="divide-y divide-line">
+        {job.steps.map((s, si) => (
+          <li key={si} className="flex items-center gap-3 px-5 py-2.5 text-[13px]">
+            <StepIcon status={s.status} conclusion={s.conclusion} />
+            <span className="flex-1 text-body">{s.name}</span>
+            <StepStatusLabel status={s.status} conclusion={s.conclusion} />
+          </li>
+        ))}
+        {job.steps.length === 0 && (
+          <li className="px-5 py-2.5 text-[12.5px] text-muted">no steps reported yet</li>
+        )}
+      </ol>
+
+      {open && (
+        <div className="border-t border-line">
+          <div className="flex items-center justify-between px-5 py-2.5">
+            <span className="flex items-center gap-2 text-[12px] text-muted">
+              <Terminal className="text-faint" /> job log
+            </span>
+            <button
+              onClick={() => setLog(null)}
+              className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream"
+            >
+              <Refresh /> refresh
+            </button>
+          </div>
+          <div className="max-h-80 overflow-y-auto overscroll-contain bg-black/40 px-5 py-4 font-mono text-[12px] leading-6">
+            <JobLogLines lines={log} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// JobLogLines renders a job's raw log: each line leads with its emphasised date
+// and time, GitHub's ##[group] markers become muted section labels, and
+// ##[error]/##[warning] lines are coloured so a failure stands out.
+function JobLogLines({ lines }: { lines: string[] | null }) {
+  if (lines === null) return <p className="text-muted">reading the job log…</p>;
+  if (lines.length === 0) return <p className="text-muted">no log output for this job.</p>;
+  return (
+    <>
+      {lines.map((raw, i) => {
+        const { ts, text } = splitLogTimestamp(raw);
+        const { kind, text: clean } = classifyJobLogLine(text);
+        if (kind === "group" && clean === "") return null; // drop endgroup markers
+        const tone =
+          kind === "error"
+            ? "text-red-400"
+            : kind === "warning"
+              ? "text-amber-300"
+              : kind === "group"
+                ? "text-muted font-semibold uppercase tracking-wide text-[11px]"
+                : kind === "command"
+                  ? "text-blue"
+                  : "text-body";
+        return (
+          <p key={i} className={`whitespace-pre-wrap break-words ${tone}`}>
+            {ts && <span className="mr-3 select-none font-semibold text-cream">{formatLogTimestamp(ts)}</span>}
+            {clean}
+          </p>
+        );
+      })}
+    </>
   );
 }
 
@@ -762,17 +848,24 @@ function LogsViewer({ serverId, ready }: { serverId: string; ready: boolean }) {
         ) : lines.length === 0 ? (
           <p className="text-muted">no logs yet. once a container is running its output shows here.</p>
         ) : (
-          lines.map((line, i) =>
-            isLogHeader(line) ? (
-              <p key={i} className="mt-3 first:mt-0 text-[11px] font-semibold uppercase tracking-wide text-lime">
-                {logHeaderName(line)}
-              </p>
-            ) : (
+          lines.map((line, i) => {
+            if (isLogHeader(line)) {
+              return (
+                <p key={i} className="mt-3 first:mt-0 text-[11px] font-semibold uppercase tracking-wide text-lime">
+                  {logHeaderName(line)}
+                </p>
+              );
+            }
+            const { ts, text } = splitLogTimestamp(line);
+            return (
               <p key={i} className="whitespace-pre-wrap break-words text-body">
-                {line}
+                {ts && (
+                  <span className="mr-3 select-none font-semibold text-cream">{formatLogTimestamp(ts)}</span>
+                )}
+                {text}
               </p>
-            ),
-          )
+            );
+          })
         )}
       </div>
     </div>
