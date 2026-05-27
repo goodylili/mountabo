@@ -8,6 +8,8 @@ import (
 	gogithub "github.com/google/go-github/v88/github"
 )
 
+var _ usecase.RepoDeployKeyManager = (*Client)(nil)
+
 // AddDeployKey registers publicKey as a deploy key on owner/repo and returns the
 // created key's id. readOnly should be true for mountabo's key, the server only
 // needs to pull, never push, which keeps the key's access scoped to one repo.

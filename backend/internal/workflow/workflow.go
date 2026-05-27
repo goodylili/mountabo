@@ -56,6 +56,10 @@ type Config struct {
 	Strategy    Strategy
 	Ports       []Port
 	EnvVars     []EnvVar
+	// DeployKeyFile, when set, is the name of the repo's read-only deploy key
+	// under the deploy user's ~/.ssh; deploy.sh uses it for git over SSH. Empty
+	// falls back to whatever key the server's git already has.
+	DeployKeyFile string
 }
 
 // DeployScriptPath is where deploy.sh is committed (repo root). The workflow's
@@ -169,6 +173,18 @@ REPO_URL="git@github.com:%[3]s/%[4]s.git"
 echo "=== %[5]s deploy (branch: $BRANCH) ==="`, c.Branch, c.DeployDir, c.Owner, c.Repo, c.App)
 }
 
+// gitAuth points git at the repo's read-only deploy key for SSH clones, when
+// one is configured. mountabo installs that key on the server out of band.
+func gitAuth(c Config) string {
+	if c.DeployKeyFile == "" {
+		return ""
+	}
+	return fmt.Sprintf(`# Use the repo's read-only deploy key for git over SSH.
+export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/%s -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+
+`, c.DeployKeyFile)
+}
+
 // clonePull clones the repo on first deploy, or fast-forwards it on later ones.
 const clonePull = `mkdir -p "$(dirname "$DEPLOY_DIR")"
 
@@ -231,6 +247,7 @@ func composeScript(c Config) string {
 	}
 
 	b.WriteByte('\n')
+	b.WriteString(gitAuth(c))
 	b.WriteString(clonePull)
 	b.WriteString("\n\n")
 	b.WriteString(cdRoot(c))
@@ -253,6 +270,7 @@ func dockerScript(c Config) string {
 	var b strings.Builder
 	b.WriteString(header(c))
 	b.WriteString("\n\n")
+	b.WriteString(gitAuth(c))
 	b.WriteString(clonePull)
 	b.WriteString("\n\n")
 	b.WriteString(cdRoot(c))

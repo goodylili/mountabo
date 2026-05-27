@@ -95,24 +95,39 @@ type EnvSecretSetter interface {
 	SetEnvSecrets(ctx context.Context, t Token, owner, repo, environment string, secrets []NamedSecret) error
 }
 
+// RepoDeployKeyManager registers a read-only SSH deploy key on a repo, returning
+// its id, so a server can git clone it (and only it).
+type RepoDeployKeyManager interface {
+	AddDeployKey(ctx context.Context, t Token, owner, repo, title, publicKey string, readOnly bool) (int64, error)
+}
+
+// DeployKeyInstaller writes a repo's deploy private key onto the server (in the
+// deploy user's ~/.ssh) over SSH, streaming progress to out.
+type DeployKeyInstaller interface {
+	InstallDeployKey(ctx context.Context, t SSHTarget, keyName, privateKey string, out io.Writer) error
+}
+
 // DeployService configures continuous deployment of a repo to a server: it
 // commits the workflow and deploy.sh, creates the deployment environment, and
 // stores the secrets the workflow needs (server connection details, managed by
 // mountabo, plus the operator's own env vars). It is also the single source of
 // truth for the generated files, so the UI previews via Preview.
 type DeployService struct {
-	servers ServerStore
-	vault   SecretVault
-	tokens  TokenStore
-	repo    RepoWriter
-	envs    EnvManager
-	secrets EnvSecretSetter
-	history DeploymentStore
+	servers    ServerStore
+	vault      SecretVault
+	tokens     TokenStore
+	repo       RepoWriter
+	envs       EnvManager
+	secrets    EnvSecretSetter
+	history    DeploymentStore
+	keys       KeyMaker
+	deployKeys RepoDeployKeyManager
+	installer  DeployKeyInstaller
 }
 
 // NewDeployService wires the service to its ports.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history}
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -168,6 +183,7 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 	}
 
 	cfg := buildConfig(in)
+	cfg.DeployKeyFile = deployKeyFileName(in.Owner, in.Repo)
 	env := cfg.Environment
 	if env == "" {
 		env = cfg.Branch
@@ -182,6 +198,31 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 	progress(out, "writing %s", wfPath)
 	if err := s.repo.PutFile(ctx, token, in.Owner, in.Repo, in.Branch, wfPath, workflow.Workflow(cfg), "mountabo: add deploy workflow"); err != nil {
 		return fmt.Errorf("write workflow: %w", err)
+	}
+
+	// Give the server a read-only deploy key so deploy.sh can clone this repo
+	// (and only this repo). Reuse the per-repo key across deploys; on first
+	// deploy, generate one, register its public half on the repo, and keep the
+	// private half in the vault. The private key is then installed on the box.
+	deployKey, _ := s.vault.LoadSecret(deployKeyVaultKey(in.Owner, in.Repo))
+	if deployKey == "" {
+		priv, pub, gerr := s.keys.Generate(fmt.Sprintf("mountabo-deploy@%s/%s", in.Owner, in.Repo))
+		if gerr != nil {
+			return fmt.Errorf("generate deploy key: %w", gerr)
+		}
+		progress(out, "registering read-only deploy key on %s/%s", in.Owner, in.Repo)
+		if _, aerr := s.deployKeys.AddDeployKey(ctx, token, in.Owner, in.Repo, fmt.Sprintf("mountabo deploy (%s)", server.Name), pub, true); aerr != nil {
+			return fmt.Errorf("register deploy key: %w", aerr)
+		}
+		if serr := s.vault.SaveSecret(deployKeyVaultKey(in.Owner, in.Repo), priv); serr != nil {
+			return fmt.Errorf("store deploy key: %w", serr)
+		}
+		deployKey = priv
+	}
+	progress(out, "installing deploy key on %s", server.Name)
+	target := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
+	if ierr := s.installer.InstallDeployKey(ctx, target, cfg.DeployKeyFile, deployKey, out); ierr != nil {
+		return fmt.Errorf("install deploy key: %w", ierr)
 	}
 
 	progress(out, "creating environment %s", env)
@@ -295,6 +336,27 @@ func secretMetas(in DeployInput) []SecretMeta {
 		}
 	}
 	return metas
+}
+
+// deployKeyVaultKey is the keychain entry holding a repo's deploy private key.
+func deployKeyVaultKey(owner, repo string) string {
+	return "deploykey-" + owner + "-" + repo
+}
+
+// deployKeyFileName is the (filesystem-safe) name the deploy key is installed
+// under in the deploy user's ~/.ssh, one per repo.
+func deployKeyFileName(owner, repo string) string {
+	var b strings.Builder
+	b.WriteString("mountabo_deploy_")
+	for _, r := range owner + "_" + repo {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 // progress writes one "==> ..." line to the live output stream, the same

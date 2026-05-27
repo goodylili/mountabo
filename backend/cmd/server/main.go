@@ -71,7 +71,10 @@ func run() error {
 	// and mountabo's stored key (keychain). One github.Client and keychain.Store
 	// already in hand serve these too.
 	deploymentStore := repository.NewDeploymentFile(filepath.Join(cfg.DataDir, "deployments.json"))
-	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient, deploymentStore)
+	// The deploy flow also mints a per-repo read-only deploy key: ssh generates
+	// the keypair and installs the private half on the server; github registers
+	// the public half on the repo.
+	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient)
 	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
 
 	// Compose the monitor: configured deployments (JSON store) enriched with

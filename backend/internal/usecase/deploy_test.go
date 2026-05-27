@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,29 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 	return nil
 }
 
+type fakeDeployKeyManager struct {
+	title     string
+	publicKey string
+	readOnly  bool
+	called    bool
+}
+
+func (f *fakeDeployKeyManager) AddDeployKey(_ context.Context, _ Token, _, _, title, publicKey string, readOnly bool) (int64, error) {
+	f.called, f.title, f.publicKey, f.readOnly = true, title, publicKey, readOnly
+	return 1, nil
+}
+
+type fakeDeployKeyInstaller struct {
+	keyName string
+	key     string
+}
+
+func (f *fakeDeployKeyInstaller) InstallDeployKey(_ context.Context, _ SSHTarget, keyName, privateKey string, out io.Writer) error {
+	f.keyName, f.key = keyName, privateKey
+	_, _ = io.WriteString(out, "==> deploy key installed\n")
+	return nil
+}
+
 type fakeTokenStore struct {
 	token Token
 	err   error
@@ -62,7 +86,7 @@ func readyDeployFixture(t *testing.T) (*memServerStore, *fakeVault, *fakeRepoWri
 	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
 	repo, envs, secrets := &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets, &fakeDeploymentStore{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{})
 	return store, vault, repo, envs, secrets, svc
 }
 
@@ -148,7 +172,7 @@ func TestDeploy_EnvironmentOverridesBranch(t *testing.T) {
 func TestDeploy_RequiresReadyServer(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusProbed})
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{})
 
 	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err == nil {
 		t.Fatal("expected an error deploying to a server that is not ready")
@@ -172,7 +196,7 @@ func TestDeploy_NotConnected(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
-	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{})
+	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{})
 
 	err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder))
 	if err == nil {
@@ -217,5 +241,50 @@ func TestPreview_RejectsInvalidEnvVarName(t *testing.T) {
 	in.EnvVars = []DeployEnvVar{{Key: "bad name", Value: "x"}}
 	if _, err := svc.Preview(in); err == nil {
 		t.Fatal("expected an error for an invalid env var name")
+	}
+}
+
+func TestDeploy_RegistersAndInstallsDeployKey(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady, Fingerprint: "fp"})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
+	mgr, inst := &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst)
+
+	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	// First deploy registers a read-only key and installs the private half on
+	// the server under a per-repo file name.
+	if !mgr.called || !mgr.readOnly {
+		t.Errorf("expected a read-only deploy key registration, got %+v", mgr)
+	}
+	if inst.keyName != "mountabo_deploy_acme_shop" {
+		t.Errorf("install key name = %q", inst.keyName)
+	}
+	if inst.key != "PRIVATE-KEY-PEM" {
+		t.Errorf("installed key = %q, want the generated private key", inst.key)
+	}
+	if vault.secrets[deployKeyVaultKey("acme", "shop")] != "PRIVATE-KEY-PEM" {
+		t.Error("deploy private key not stored for reuse")
+	}
+}
+
+func TestDeploy_ReusesStoredDeployKey(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
+	_ = vault.SaveSecret(deployKeyVaultKey("acme", "shop"), "EXISTING-DEPLOY-KEY")
+	mgr, inst := &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst)
+
+	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if mgr.called {
+		t.Error("should not re-register a deploy key when one is already stored")
+	}
+	if inst.key != "EXISTING-DEPLOY-KEY" {
+		t.Errorf("installed key = %q, want the stored one", inst.key)
 	}
 }
