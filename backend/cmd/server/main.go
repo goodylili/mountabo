@@ -64,7 +64,8 @@ func run() error {
 	serverStore := repository.NewServerFile(filepath.Join(cfg.DataDir, "servers.json"))
 	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
 	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
-	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, logger)
+	serverMetricsSvc := usecase.NewServerMetricsService(serverStore, keyStore, sshClient)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
 	// environment/secrets (all github), reading the server record (JSON store)

@@ -32,6 +32,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/servers/options", sv.Options)
 	mux.HandleFunc("GET /api/servers/{id}/setup", sv.Setup)
 	mux.HandleFunc("GET /api/servers/{id}/ports", sv.Ports)
+	mux.HandleFunc("GET /api/servers/{id}/metrics", sv.Metrics)
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
 	mux.HandleFunc("POST /api/deploy/preview", dep.Preview)
 	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)

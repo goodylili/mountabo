@@ -14,18 +14,36 @@ import (
 	"github.com/goodylili/mountabo/internal/usecase"
 )
 
-// ServersHandler serves the add-server, list, live-setup, and port-check
-// endpoints.
+// ServersHandler serves the add-server, list, live-setup, port-check, and
+// host-metrics endpoints.
 type ServersHandler struct {
-	svc   *usecase.ServerService
-	ports *usecase.ServerPortService
-	log   *slog.Logger
+	svc     *usecase.ServerService
+	ports   *usecase.ServerPortService
+	metrics *usecase.ServerMetricsService
+	log     *slog.Logger
 }
 
-// NewServersHandler wires the handler to the server service, the port-check
-// service, and a logger.
-func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, log *slog.Logger) *ServersHandler {
-	return &ServersHandler{svc: svc, ports: ports, log: log}
+// NewServersHandler wires the handler to the server service, the port-check and
+// metrics services, and a logger.
+func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, metrics *usecase.ServerMetricsService, log *slog.Logger) *ServersHandler {
+	return &ServersHandler{svc: svc, ports: ports, metrics: metrics, log: log}
+}
+
+// Metrics reports a server's live host health (cpu/load, memory, disk, uptime),
+// read over SSH, so the monitor can show real numbers instead of placeholders.
+func (h *ServersHandler) Metrics(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	metrics, err := h.metrics.Metrics(r.Context(), id)
+	if errors.Is(err, usecase.ErrServerNotFound) {
+		h.writeError(w, nethttp.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		h.log.Error("read server metrics failed", "id", id, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not read server metrics")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, metrics)
 }
 
 // Ports reports the ports already listening on a server so the configure UI can
