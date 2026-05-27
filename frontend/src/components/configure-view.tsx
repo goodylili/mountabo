@@ -266,6 +266,10 @@ export function ConfigureView({
         )}
 
         <Section label="environment variables" hint="become encrypted repo secrets">
+          <p className="mb-3 text-[12px] leading-5 text-muted">
+            your app&apos;s own variables only. mountabo sets the server connection (host, ssh key, deploy
+            directory) for you, so you never add server details like an ip or password here.
+          </p>
           {/* Import a whole .env at once: paste it or pick a file. Parsing is
               local; values never leave the browser here. */}
           <div className="mb-3 flex items-center gap-2">
@@ -340,8 +344,8 @@ export function ConfigureView({
                     />
                     {badKey && (
                       <span className="mt-1 block text-[11px] text-red-300">
-                        not a valid name. use letters, digits and underscores, and don&apos;t start with a digit. split
-                        a value like an ip and a password into two named variables.
+                        not a valid name. use letters, digits and underscores, and don&apos;t start with a digit, for
+                        example DATABASE_URL or API_KEY.
                       </span>
                     )}
                   </div>
