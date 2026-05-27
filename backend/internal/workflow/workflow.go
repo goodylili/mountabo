@@ -205,6 +205,30 @@ else
   cd "$DEPLOY_DIR"
 fi`
 
+// populateEnvFiles copies the .env just written into any per-service env file
+// the compose declares (env_file:), since those files are not committed to the
+// repo. It only touches paths ending in .env and only when the file is missing,
+// so a committed env file is never overwritten and unrelated list items (ports,
+// volumes) are ignored. Paths are relative to the compose file in the current
+// directory, matching how compose resolves env_file.
+const populateEnvFiles = `# Create any per-service env files the compose references (env_file:) from the
+# .env above, so the configured variables reach every service.
+for cf in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+  [ -f "$cf" ] || continue
+  awk '
+    function emit(p){ gsub(/^[ \t]+|[ \t]+$/,"",p); gsub(/^"|"$/,"",p); if(p!="") print p }
+    /^[ \t]*env_file:[ \t]*[^ \t#]/ { line=$0; sub(/^[ \t]*env_file:[ \t]*/,"",line); emit(line); blk=0; next }
+    /^[ \t]*env_file:[ \t]*$/ { blk=1; next }
+    blk { if ($0 ~ /^[ \t]*-[ \t]*/) { line=$0; sub(/^[ \t]*-[ \t]*/,"",line); emit(line) } else if ($0 ~ /[^ \t]/) { blk=0 } }
+  ' "$cf"
+done | sort -u | while IFS= read -r ef; do
+  case "$ef" in
+    *.env) mkdir -p "$(dirname "$ef")"; [ -f "$ef" ] || cp .env "$ef" ;;
+  esac
+done
+
+`
+
 // cdRoot is the `cd <rootDir>` line (with trailing newline) when the app lives
 // in a sub-directory, or "" for the repo root.
 func cdRoot(c Config) string {
@@ -259,6 +283,7 @@ func composeScript(c Config) string {
 	b.WriteString("# Write .env (ports + your environment variables) for docker compose.\ncat > .env <<EOF\n")
 	b.WriteString(envFileBody(c, true))
 	b.WriteString("\nEOF\n\n")
+	b.WriteString(populateEnvFiles)
 	b.WriteString(`# Zero-downtime: build new images while old containers keep running, then swap.
 echo "Building images..."
 docker compose build
