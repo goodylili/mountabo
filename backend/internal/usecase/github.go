@@ -21,13 +21,10 @@ const repoCacheTTL = 60 * time.Second
 // ErrNotConnected is returned when no GitHub token is stored yet.
 var ErrNotConnected = errors.New("github not connected")
 
-// Token is the credential mountabo holds for a connected GitHub account. For a
-// GitHub App user-to-server authorization it may carry a refresh token and an
-// expiry; both are empty/zero when the App issues non-expiring tokens.
+// Token is the credential mountabo holds for a connected GitHub account: the
+// non-expiring OAuth access token, persisted in the OS keychain.
 type Token struct {
-	AccessToken  string
-	RefreshToken string
-	Expiry       time.Time
+	AccessToken string
 }
 
 // Account identifies the GitHub user a token authenticates as.

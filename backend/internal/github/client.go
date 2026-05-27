@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Client reads from the GitHub API using a user-to-server token. It is stateless
+// Client reads from the GitHub API using an OAuth access token. It is stateless
 // with respect to credentials: each call builds an authenticated client from the
 // token it is given, so one Client can serve any connected account.
 type Client struct{}
@@ -42,44 +42,24 @@ func (c *Client) Account(ctx context.Context, t usecase.Token) (usecase.Account,
 	return usecase.Account{Login: user.GetLogin()}, nil
 }
 
-// List returns every repository the token can access, public and private. To
-// miss nothing it unions two sources and de-dupes by full name: GET /user/repos
-// (owned, collaborator, organization) and the GitHub App's installation repos
-// (which can surface org/private repos /user/repos omits). Each source is
-// best-effort, if one fails but the other returns repos, the listing still
-// succeeds; only when both fail and nothing came back is it an error. The UI
-// ordering (most recently pushed first) is restored after merging.
+// List returns every repository the OAuth token can access, public and private.
+// GET /user/repos with visibility "all" and owner, collaborator, and
+// organization-member affiliations covers them all under the repo scope. Results
+// are ordered most recently pushed first, then annotated with container config.
 func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, error) {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {
 		return nil, fmt.Errorf("build github client: %w", err)
 	}
 
-	seen := map[string]bool{}
-	var repos []usecase.Repo
-	add := func(list []*gogithub.Repository) {
-		for _, r := range list {
-			full := r.GetFullName()
-			if full == "" || seen[full] {
-				continue
-			}
-			seen[full] = true
-			repos = append(repos, toRepo(r))
-		}
+	raw, err := listAuthenticatedUserRepos(ctx, api)
+	if err != nil {
+		return nil, err
 	}
 
-	userRepos, userErr := listAuthenticatedUserRepos(ctx, api)
-	add(userRepos)
-	installRepos, installErr := listInstallationRepos(ctx, api)
-	add(installRepos)
-
-	if len(repos) == 0 {
-		if userErr != nil {
-			return nil, userErr
-		}
-		if installErr != nil {
-			return nil, installErr
-		}
+	repos := make([]usecase.Repo, 0, len(raw))
+	for _, r := range raw {
+		repos = append(repos, toRepo(r))
 	}
 
 	// Most recently pushed first.
@@ -135,43 +115,6 @@ func listAuthenticatedUserRepos(ctx context.Context, api *gogithub.Client) ([]*g
 	var out []*gogithub.Repository
 	for _, page := range pages {
 		out = append(out, page...)
-	}
-	return out, nil
-}
-
-// listInstallationRepos enumerates repositories across every GitHub App
-// installation the user can reach (their account plus orgs the app is installed
-// on), which catches repos /user/repos can omit. It returns an empty slice (no
-// error) when the user has no installations.
-func listInstallationRepos(ctx context.Context, api *gogithub.Client) ([]*gogithub.Repository, error) {
-	var installations []*gogithub.Installation
-	opt := &gogithub.ListOptions{PerPage: 100}
-	for {
-		page, resp, err := api.Apps.ListUserInstallations(ctx, opt)
-		if err != nil {
-			return nil, fmt.Errorf("list installations: %w", err)
-		}
-		installations = append(installations, page...)
-		if resp.NextPage == 0 {
-			break
-		}
-		opt.Page = resp.NextPage
-	}
-
-	var out []*gogithub.Repository
-	for _, inst := range installations {
-		repoOpt := &gogithub.ListOptions{PerPage: 100}
-		for {
-			result, resp, err := api.Apps.ListUserRepos(ctx, inst.GetID(), repoOpt)
-			if err != nil {
-				return nil, fmt.Errorf("list repositories for installation %d: %w", inst.GetID(), err)
-			}
-			out = append(out, result.Repositories...)
-			if resp.NextPage == 0 {
-				break
-			}
-			repoOpt.Page = resp.NextPage
-		}
 	}
 	return out, nil
 }

@@ -9,6 +9,7 @@ import nethttp "net/http"
 //	GET    /api/github/repos         list the connected account's repositories
 //	GET    /api/github/ports         detect a repo's published ports (compose/Dockerfile)
 //	GET    /api/github/tree          list a repo's file tree (directory/file picker)
+//	GET    /api/github/env-example    variable names from a repo's .env.example
 //	DELETE /api/github/token         forget the stored token
 //	POST   /api/servers              add a server (probe specs over SSH)
 //	GET    /api/servers              list added servers
@@ -28,6 +29,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/github/repos", gh.Repos)
 	mux.HandleFunc("GET /api/github/ports", gh.Ports)
 	mux.HandleFunc("GET /api/github/tree", gh.Tree)
+	mux.HandleFunc("GET /api/github/env-example", gh.EnvExample)
 	mux.HandleFunc("DELETE /api/github/token", gh.Disconnect)
 
 	mux.HandleFunc("POST /api/servers", sv.Add)

@@ -16,15 +16,16 @@ const maxBodyBytes = 64 << 10
 
 // GitHubHandler serves the GitHub connection endpoints over the usecase layer.
 type GitHubHandler struct {
-	connector *usecase.GitHubConnector
-	tree      *usecase.TreeService
-	log       *slog.Logger
+	connector  *usecase.GitHubConnector
+	tree       *usecase.TreeService
+	envExample *usecase.EnvExampleService
+	log        *slog.Logger
 }
 
 // NewGitHubHandler wires the handler to the connector, the repo-tree service,
-// and a logger.
-func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, log *slog.Logger) *GitHubHandler {
-	return &GitHubHandler{connector: connector, tree: tree, log: log}
+// the env-example service, and a logger.
+func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, envExample *usecase.EnvExampleService, log *slog.Logger) *GitHubHandler {
+	return &GitHubHandler{connector: connector, tree: tree, envExample: envExample, log: log}
 }
 
 type exchangeRequest struct {
@@ -201,6 +202,36 @@ func (h *GitHubHandler) Tree(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 	h.writeJSON(w, nethttp.StatusOK, entries)
+}
+
+// EnvExample reports the variable names declared in a repo's example env file
+// (.env.example or a common variant), so the configure UI can pre-fill the env
+// var rows for the operator to fill in. owner and repo are required; ref
+// (branch/sha) and dir (sub-directory) are optional. A repo with no example file
+// returns an empty array, not an error.
+func (h *GitHubHandler) EnvExample(w nethttp.ResponseWriter, r *nethttp.Request) {
+	q := r.URL.Query()
+	owner, repo := q.Get("owner"), q.Get("repo")
+	if owner == "" || repo == "" {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner or repo")
+		return
+	}
+
+	ref := usecase.RepoRef{Owner: owner, Name: repo, Ref: q.Get("ref"), Dir: q.Get("dir")}
+	keys, err := h.envExample.Keys(r.Context(), ref)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("read env example failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not read the example env file")
+		return
+	}
+
+	out := make([]string, 0, len(keys))
+	out = append(out, keys...)
+	h.writeJSON(w, nethttp.StatusOK, out)
 }
 
 // Disconnect removes the stored token from the keychain.

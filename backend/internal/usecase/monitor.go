@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // Deployment is a repo+branch mountabo has configured to deploy to a server. It
@@ -90,6 +92,7 @@ type DeploymentStatus struct {
 const (
 	monitorRunLimit   = 5
 	monitorEventLimit = 10
+	monitorFetchLimit = 8 // concurrent per-deployment GitHub/DB fetches
 )
 
 // MonitorService reports deploy history: the configured deployments enriched
@@ -123,12 +126,24 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 		return nil, fmt.Errorf("load token: %w", err)
 	}
 
-	out := make([]DeploymentStatus, 0, len(deployments))
-	for _, d := range deployments {
-		runs, _ := s.runs.ListWorkflowRuns(ctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit) // best-effort
-		events, total, _ := s.events.DeployEvents(d.Owner, d.Repo, d.Branch, monitorEventLimit)                    // best-effort
-		out = append(out, buildStatus(d, runs, events, total))
+	// Each deployment needs an independent GitHub Actions lookup, so fan them out
+	// (bounded) rather than paying for them one after another: the page used to
+	// block on the sum of every deployment's round-trip. Each goroutine writes
+	// its own slot, so the result keeps the deployment order without locking.
+	out := make([]DeploymentStatus, len(deployments))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(monitorFetchLimit)
+	for i, d := range deployments {
+		g.Go(func() error {
+			// Best-effort per deployment: a repo that's deleted, lacks
+			// permission, or has no runs yet still appears, just without runs.
+			runs, _ := s.runs.ListWorkflowRuns(gctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit)
+			events, total, _ := s.events.DeployEvents(d.Owner, d.Repo, d.Branch, monitorEventLimit)
+			out[i] = buildStatus(d, runs, events, total)
+			return nil
+		})
 	}
+	_ = g.Wait() // goroutines are best-effort and never return an error; Wait only joins them
 	return out, nil
 }
 

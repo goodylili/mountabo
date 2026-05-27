@@ -24,8 +24,8 @@ type Config struct {
 	DataDir string
 }
 
-// GitHubConfig holds the GitHub App OAuth credentials used to exchange
-// authorization codes for user-to-server tokens.
+// GitHubConfig holds the OAuth App credentials used to exchange authorization
+// codes for access tokens.
 type GitHubConfig struct {
 	ClientID     string
 	ClientSecret string

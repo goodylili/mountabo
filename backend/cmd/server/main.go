@@ -40,23 +40,24 @@ func run() error {
 	// driven by the connector. One github.Client serves account, repo, and
 	// container-config reads.
 	ghClient := github.NewClient()
-	// The OAuth adapter both exchanges codes and refreshes tokens; the token
-	// manager wraps the keychain store so every Load returns a still-valid token
-	// (GitHub App user tokens expire ~8h), keeping the user's OAuth credential
-	// usable for all GitHub requests, repos, deploy keys, secrets, and workflows.
+	// The OAuth adapter exchanges authorization codes for the access token; the
+	// keychain store persists it, and every later GitHub request reads it back:
+	// repos, deploy keys, secrets, and workflows.
 	oauth := github.NewOAuth(cfg.GitHub.ClientID, cfg.GitHub.ClientSecret)
-	tokens := usecase.NewTokenManager(keyStore, oauth)
 	connector := usecase.NewGitHubConnector(
 		oauth,
 		ghClient,
 		ghClient,
 		ghClient,
-		tokens,
+		keyStore,
 	)
 	// Repo tree listing (directory/file picker) reads on the user's behalf with
-	// the same refreshing token.
-	treeSvc := usecase.NewTreeService(tokens, ghClient)
-	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, logger)
+	// the same keychain token.
+	treeSvc := usecase.NewTreeService(keyStore, ghClient)
+	// .env.example discovery: read the repo's example env file so the configure
+	// form can pre-fill the env var rows for the operator to fill in.
+	envExampleSvc := usecase.NewEnvExampleService(keyStore, ghClient)
+	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, envExampleSvc, logger)
 
 	// Compose the server flow: SSH probe + bootstrap + key generation (all ssh),
 	// JSON-file persistence, and keychain secrets. One ssh.Client serves probe,
@@ -84,12 +85,12 @@ func run() error {
 	// The deploy flow also mints a per-repo read-only deploy key: ssh generates
 	// the keypair and installs the private half on the server; github registers
 	// the public half on the repo.
-	deploySvc := usecase.NewDeployService(serverStore, keyStore, tokens, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient)
+	deploySvc := usecase.NewDeployService(serverStore, keyStore, keyStore, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient)
 	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
 
 	// Compose the monitor: configured deployments (JSON store) enriched with
-	// their GitHub Actions runs (github), read with the refreshing token.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, tokens, ghClient)
+	// their GitHub Actions runs (github), read with the keychain token.
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, keyStore, ghClient)
 	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
 
 	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler)
