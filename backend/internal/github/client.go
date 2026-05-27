@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/goodylili/mountabo/internal/usecase"
@@ -40,11 +41,15 @@ func (c *Client) Account(ctx context.Context, t usecase.Token) (usecase.Account,
 	return usecase.Account{Login: user.GetLogin()}, nil
 }
 
-// List returns every repository the token can access. Visibility "all" includes
-// private repos; the default affiliation covers owned, collaborator, and org
-// repositories. It fetches page 1 to learn the page count, then fetches the rest
-// concurrently (bounded) rather than walking NextPage one round-trip at a time,
-// for accounts with hundreds of repos this turns ~7s of serial calls into ~1.
+// List returns every repository the token can access, public and private,
+// owned, collaborator, and organization. It paginates with a STABLE sort
+// (full_name): the previous "pushed" sort reorders the moment any repo is
+// pushed, so concurrent page windows could shift and silently drop a repo at a
+// page boundary, which is why some repos intermittently went missing. With a
+// stable key the page windows are fixed, so every repo is fetched exactly once;
+// the UI ordering (most recently pushed first) is restored by sorting in memory
+// after all pages are in. Page 1 is fetched first to learn the page count, then
+// the rest concurrently (bounded).
 func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, error) {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {
@@ -54,7 +59,8 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 	opt := gogithub.RepositoryListByAuthenticatedUserOptions{
 		Visibility:  "all",
 		Affiliation: "owner,collaborator,organization_member",
-		Sort:        "pushed",
+		Sort:        "full_name", // stable across pushes, so pagination never skips a repo
+		Direction:   "asc",
 		ListOptions: gogithub.ListOptions{PerPage: 100, Page: 1},
 	}
 
@@ -88,12 +94,23 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 		}
 	}
 
+	// De-dupe by full name as a safety net (a repo shifting across a boundary
+	// mid-fetch could otherwise appear twice).
+	seen := map[string]bool{}
 	var repos []usecase.Repo
 	for _, page := range pages {
 		for _, r := range page {
+			full := r.GetFullName()
+			if seen[full] {
+				continue
+			}
+			seen[full] = true
 			repos = append(repos, toRepo(r))
 		}
 	}
+
+	// Restore the UI's "most recently pushed first" ordering.
+	sort.Slice(repos, func(i, j int) bool { return repos[i].PushedAt.After(repos[j].PushedAt) })
 
 	annotateDocker(ctx, api, repos)
 	return repos, nil
