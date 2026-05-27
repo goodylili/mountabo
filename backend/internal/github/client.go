@@ -41,25 +41,63 @@ func (c *Client) Account(ctx context.Context, t usecase.Token) (usecase.Account,
 	return usecase.Account{Login: user.GetLogin()}, nil
 }
 
-// List returns every repository the token can access, public and private,
-// owned, collaborator, and organization. It paginates with a STABLE sort
-// (full_name): the previous "pushed" sort reorders the moment any repo is
-// pushed, so concurrent page windows could shift and silently drop a repo at a
-// page boundary, which is why some repos intermittently went missing. With a
-// stable key the page windows are fixed, so every repo is fetched exactly once;
-// the UI ordering (most recently pushed first) is restored by sorting in memory
-// after all pages are in. Page 1 is fetched first to learn the page count, then
-// the rest concurrently (bounded).
+// List returns every repository the token can access, public and private. To
+// miss nothing it unions two sources and de-dupes by full name: GET /user/repos
+// (owned, collaborator, organization) and the GitHub App's installation repos
+// (which can surface org/private repos /user/repos omits). Each source is
+// best-effort, if one fails but the other returns repos, the listing still
+// succeeds; only when both fail and nothing came back is it an error. The UI
+// ordering (most recently pushed first) is restored after merging.
 func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, error) {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {
 		return nil, fmt.Errorf("build github client: %w", err)
 	}
 
+	seen := map[string]bool{}
+	var repos []usecase.Repo
+	add := func(list []*gogithub.Repository) {
+		for _, r := range list {
+			full := r.GetFullName()
+			if full == "" || seen[full] {
+				continue
+			}
+			seen[full] = true
+			repos = append(repos, toRepo(r))
+		}
+	}
+
+	userRepos, userErr := listAuthenticatedUserRepos(ctx, api)
+	add(userRepos)
+	installRepos, installErr := listInstallationRepos(ctx, api)
+	add(installRepos)
+
+	if len(repos) == 0 {
+		if userErr != nil {
+			return nil, userErr
+		}
+		if installErr != nil {
+			return nil, installErr
+		}
+	}
+
+	// Most recently pushed first.
+	sort.Slice(repos, func(i, j int) bool { return repos[i].PushedAt.After(repos[j].PushedAt) })
+
+	annotateDocker(ctx, api, repos)
+	return repos, nil
+}
+
+// listAuthenticatedUserRepos pages GET /user/repos with a STABLE sort
+// (full_name): "pushed" reorders the instant any repo is pushed, so concurrent
+// page windows could shift and silently drop a repo at a boundary. With a stable
+// key the windows are fixed, so every repo is fetched exactly once. Page 1 is
+// fetched first to learn the count, the rest concurrently (bounded).
+func listAuthenticatedUserRepos(ctx context.Context, api *gogithub.Client) ([]*gogithub.Repository, error) {
 	opt := gogithub.RepositoryListByAuthenticatedUserOptions{
 		Visibility:  "all",
 		Affiliation: "owner,collaborator,organization_member",
-		Sort:        "full_name", // stable across pushes, so pagination never skips a repo
+		Sort:        "full_name",
 		Direction:   "asc",
 		ListOptions: gogithub.ListOptions{PerPage: 100, Page: 1},
 	}
@@ -69,17 +107,16 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 		return nil, fmt.Errorf("list repositories: %w", err)
 	}
 
-	// pages[i] holds page i+1; index 0 is the page we already have.
 	pages := make([][]*gogithub.Repository, max(resp.LastPage, 1))
 	pages[0] = first
 
 	if resp.LastPage > 1 {
 		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(6) // bound concurrent GitHub calls
+		g.SetLimit(6)
 		for p := 2; p <= resp.LastPage; p++ {
-			pageOpt := opt // copy; each goroutine gets its own page number
+			pageOpt := opt
 			pageOpt.Page = p
-			idx := p - 1 // distinct slice index per goroutine, no shared write
+			idx := p - 1
 			g.Go(func() error {
 				repos, _, err := api.Repositories.ListByAuthenticatedUser(gctx, &pageOpt)
 				if err != nil {
@@ -94,69 +131,102 @@ func (c *Client) List(ctx context.Context, t usecase.Token) ([]usecase.Repo, err
 		}
 	}
 
-	// De-dupe by full name as a safety net (a repo shifting across a boundary
-	// mid-fetch could otherwise appear twice).
-	seen := map[string]bool{}
-	var repos []usecase.Repo
+	var out []*gogithub.Repository
 	for _, page := range pages {
-		for _, r := range page {
-			full := r.GetFullName()
-			if seen[full] {
-				continue
-			}
-			seen[full] = true
-			repos = append(repos, toRepo(r))
+		out = append(out, page...)
+	}
+	return out, nil
+}
+
+// listInstallationRepos enumerates repositories across every GitHub App
+// installation the user can reach (their account plus orgs the app is installed
+// on), which catches repos /user/repos can omit. It returns an empty slice (no
+// error) when the user has no installations.
+func listInstallationRepos(ctx context.Context, api *gogithub.Client) ([]*gogithub.Repository, error) {
+	var installations []*gogithub.Installation
+	opt := &gogithub.ListOptions{PerPage: 100}
+	for {
+		page, resp, err := api.Apps.ListUserInstallations(ctx, opt)
+		if err != nil {
+			return nil, fmt.Errorf("list installations: %w", err)
 		}
+		installations = append(installations, page...)
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
 	}
 
-	// Restore the UI's "most recently pushed first" ordering.
-	sort.Slice(repos, func(i, j int) bool { return repos[i].PushedAt.After(repos[j].PushedAt) })
-
-	annotateDocker(ctx, api, repos)
-	return repos, nil
+	var out []*gogithub.Repository
+	for _, inst := range installations {
+		repoOpt := &gogithub.ListOptions{PerPage: 100}
+		for {
+			result, resp, err := api.Apps.ListUserRepos(ctx, inst.GetID(), repoOpt)
+			if err != nil {
+				return nil, fmt.Errorf("list repositories for installation %d: %w", inst.GetID(), err)
+			}
+			out = append(out, result.Repositories...)
+			if resp.NextPage == 0 {
+				break
+			}
+			repoOpt.Page = resp.NextPage
+		}
+	}
+	return out, nil
 }
 
-// dockerRootNames are the root-level filenames that mark a repo as ready to
-// containerize. Matched case-insensitively; any "Dockerfile*" variant counts.
-var dockerRootNames = map[string]bool{
-	"dockerfile":          true,
-	"docker-compose.yml":  true,
-	"docker-compose.yaml": true,
-	"compose.yml":         true,
-	"compose.yaml":        true,
-}
-
-// annotateDocker sets HasDocker on each repo by inspecting its root directory.
-// It fans the per-repo lookups out with bounded concurrency (one GitHub call
-// per repo) and writes only to its own slice element, so no element is shared
-// between goroutines. A failed lookup (empty repo, missing branch, transient
-// error) leaves HasDocker false rather than failing the whole listing, so the
-// docker flag is best-effort and never blocks the repo list.
+// annotateDocker sets each repo's container Kind ("compose"/"docker"/"none")
+// and HasDocker by inspecting its root directory. It fans the per-repo lookups
+// out with bounded concurrency (one GitHub call per repo), writing only to its
+// own slice element. A failed lookup (empty repo, missing branch, transient
+// error) leaves Kind "none" rather than failing the whole listing, so it is
+// best-effort and never blocks the repo list.
 func annotateDocker(ctx context.Context, api *gogithub.Client, repos []usecase.Repo) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(8) // bound concurrent GitHub calls
 	for i := range repos {
 		// each goroutine writes only its own slice element, so no element is shared
 		g.Go(func() error {
-			repos[i].HasDocker = hasDockerRoot(gctx, api, repos[i])
+			kind := containerKind(gctx, api, repos[i])
+			repos[i].Kind = kind
+			repos[i].HasDocker = kind != "none"
 			return nil // best-effort: never abort the group on one repo
 		})
 	}
 	_ = g.Wait()
 }
 
-// hasDockerRoot reports whether the repo's root directory contains a Dockerfile
-// or a Compose file. It reads the root listing in a single call against the
-// default branch; errors (including a 404 on an empty repo) report false.
-func hasDockerRoot(ctx context.Context, api *gogithub.Client, r usecase.Repo) bool {
+// containerKind reports how a repo containerizes from its root directory: a
+// Compose file wins ("compose"), else a Dockerfile ("docker"), else "none". It
+// reads the root listing in a single call against the default branch; errors
+// (including a 404 on an empty repo) report "none".
+func containerKind(ctx context.Context, api *gogithub.Client, r usecase.Repo) string {
 	opt := &gogithub.RepositoryContentGetOptions{Ref: r.DefaultBranch}
 	_, dir, _, err := api.Repositories.GetContents(ctx, r.Owner, r.Name, "", opt)
 	if err != nil {
-		return false
+		return "none"
 	}
+	hasDockerfile := false
 	for _, entry := range dir {
 		name := strings.ToLower(entry.GetName())
-		if dockerRootNames[name] || strings.HasPrefix(name, "dockerfile") {
+		if isComposeName(name) {
+			return "compose" // compose takes precedence over a bare Dockerfile
+		}
+		if strings.HasPrefix(name, "dockerfile") {
+			hasDockerfile = true
+		}
+	}
+	if hasDockerfile {
+		return "docker"
+	}
+	return "none"
+}
+
+// isComposeName reports whether a root filename is one of the Compose files
+// mountabo recognises (shares the list with port detection).
+func isComposeName(lowerName string) bool {
+	for _, n := range composeNames {
+		if lowerName == n {
 			return true
 		}
 	}

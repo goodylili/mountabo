@@ -47,6 +47,10 @@ type Repo struct {
 	// HasDocker is true when the repo's root holds a Dockerfile or a Compose
 	// file, so the UI can flag repos that are ready to containerize.
 	HasDocker bool
+	// Kind is how the repo containerizes, from its root: "compose" (a Compose
+	// file, takes precedence), "docker" (a Dockerfile only), or "none". Lets the
+	// UI filter compose / docker / non-docker repos.
+	Kind string
 }
 
 // RepoRef points at a place inside a repository to read container config from:
