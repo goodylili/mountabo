@@ -72,9 +72,12 @@ func run() error {
 	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
 	serverMetricsSvc := usecase.NewServerMetricsService(serverStore, keyStore, sshClient)
 	serverLogsSvc := usecase.NewServerLogsService(serverStore, keyStore, sshClient)
-	// The dashboard service reverse proxies a server's loopback monitoring UIs
-	// (Netdata/Uptime Kuma/ntfy) by tunneling HTTP over the same ssh.Client.
+	// The dashboard service opens SSH local port-forward tunnels to a server's
+	// loopback monitoring UI (Uptime Kuma) over the same ssh.Client, binding to
+	// this machine's loopback so the browser loads it directly. Tunnels are torn
+	// down on shutdown.
 	serverDashboardSvc := usecase.NewServerDashboardService(serverStore, keyStore, sshClient)
+	defer func() { _ = serverDashboardSvc.Close() }()
 	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, serverDashboardSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the

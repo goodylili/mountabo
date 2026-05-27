@@ -82,32 +82,20 @@ func (h *ServersHandler) Logs(w nethttp.ResponseWriter, r *nethttp.Request) {
 	h.writeJSON(w, nethttp.StatusOK, map[string][]string{"lines": lines})
 }
 
-// Dashboard reverse proxies a server's loopback monitoring dashboard (Netdata,
-// Uptime Kuma, ntfy) to the operator's browser by tunneling the HTTP request
-// over the server's SSH connection: the backend dials 127.0.0.1:<tool port>
-// through SSH and relays the tool's response (status, headers, body) back. Only
-// the known tools are allowed, and only when that tool is in the server's
-// applied options; everything else is rejected. The {tool} segment names the
-// tool; {rest...} is the tool-relative path (root and assets). It is read access
-// only; no method is special cased, the tool's own UI decides what each request
-// does, and these tools render read-only dashboards.
-func (h *ServersHandler) Dashboard(w nethttp.ResponseWriter, r *nethttp.Request) {
+// OpenDashboard opens an SSH local port-forward tunnel to a server's loopback
+// monitoring dashboard (Uptime Kuma) and returns the local URL the operator's
+// browser loads directly: {"url":"http://127.0.0.1:<port>/"}. The tunnel binds
+// to this machine's loopback only and forwards raw TCP over the server's SSH
+// connection, so the dashboard's HTTP and websockets work and it is served at
+// the root of the local port. Only the known tools are allowed, and only when
+// that tool is in the server's applied options; everything else is 404. A failed
+// SSH tunnel is 502. It is read access only; the tunnel just forwards to the
+// existing tool.
+func (h *ServersHandler) OpenDashboard(w nethttp.ResponseWriter, r *nethttp.Request) {
 	id := r.PathValue("id")
 	tool := r.PathValue("tool")
 
-	// Reassemble the tool-relative target: leading slash + the catch-all rest +
-	// the original query, so deep links and assets resolve under the tool's root.
-	path := "/" + strings.TrimPrefix(r.PathValue("rest"), "/")
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-
-	resp, err := h.dashboard.Proxy(r.Context(), id, tool, usecase.DashboardRequest{
-		Method: r.Method,
-		Path:   path,
-		Header: requestHeaderForProxy(r.Header),
-		Body:   r.Body,
-	})
+	url, err := h.dashboard.Open(r.Context(), id, tool)
 	switch {
 	case errors.Is(err, usecase.ErrServerNotFound):
 		h.writeError(w, nethttp.StatusNotFound, "server not found")
@@ -119,57 +107,11 @@ func (h *ServersHandler) Dashboard(w nethttp.ResponseWriter, r *nethttp.Request)
 		h.writeError(w, nethttp.StatusNotFound, "that monitoring tool is not installed on this server")
 		return
 	case err != nil:
-		h.log.Error("proxy dashboard failed", "id", id, "tool", tool, "err", err)
-		h.writeError(w, nethttp.StatusBadGateway, "could not reach the dashboard over ssh")
+		h.log.Error("open dashboard tunnel failed", "id", id, "tool", tool, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not open the dashboard tunnel over ssh")
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Relay the tool's response verbatim, minus hop-by-hop headers, so its HTML
-	// and assets render in the embedding iframe / opened tab.
-	dst := w.Header()
-	for key, vals := range resp.Header {
-		if hopByHopHeader(key) {
-			continue
-		}
-		for _, v := range vals {
-			dst.Add(key, v)
-		}
-	}
-	w.WriteHeader(resp.Status)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		h.log.Warn("relay dashboard body", "id", id, "tool", tool, "err", err)
-	}
-}
-
-// hopByHopHeaders are connection-scoped headers that must not be forwarded
-// through a proxy (RFC 7230 §6.1).
-var hopByHopHeaders = map[string]bool{
-	"connection":          true,
-	"keep-alive":          true,
-	"proxy-authenticate":  true,
-	"proxy-authorization": true,
-	"te":                  true,
-	"trailer":             true,
-	"transfer-encoding":   true,
-	"upgrade":             true,
-}
-
-func hopByHopHeader(key string) bool { return hopByHopHeaders[strings.ToLower(key)] }
-
-// requestHeaderForProxy copies the inbound request headers minus hop-by-hop and
-// host-shaping headers, so the tool sees a clean request without mountabo's own
-// host/forwarding metadata.
-func requestHeaderForProxy(src nethttp.Header) nethttp.Header {
-	out := nethttp.Header{}
-	for key, vals := range src {
-		lower := strings.ToLower(key)
-		if hopByHopHeaders[lower] || lower == "host" || strings.HasPrefix(lower, "x-forwarded-") {
-			continue
-		}
-		out[key] = append([]string(nil), vals...)
-	}
-	return out
+	h.writeJSON(w, nethttp.StatusOK, map[string]string{"url": url})
 }
 
 // Ports reports the ports already listening on a server so the configure UI can

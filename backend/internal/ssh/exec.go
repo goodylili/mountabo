@@ -31,12 +31,12 @@ func (c *Client) Exec(ctx context.Context, t usecase.SSHTarget, command string, 
 	}
 	defer func() { _ = session.Close() }()
 
-	// CombinedOutput buffers everything in memory; cap.Writer is wired as the
+	// CombinedOutput buffers everything in memory; a capWriter is wired as the
 	// session's writer instead so the captured output can never exceed maxBytes
 	// regardless of how chatty the command is.
-	cap := &capWriter{limit: maxBytes}
-	session.Stdout = cap
-	session.Stderr = cap
+	cw := &capWriter{limit: maxBytes}
+	session.Stdout = cw
+	session.Stderr = cw
 
 	done := make(chan struct{})
 	defer close(done)
@@ -49,7 +49,7 @@ func (c *Client) Exec(ctx context.Context, t usecase.SSHTarget, command string, 
 	}()
 
 	runErr := session.Run(command)
-	out := cap.String()
+	out := cw.String()
 
 	if runErr == nil {
 		return out, 0, nil

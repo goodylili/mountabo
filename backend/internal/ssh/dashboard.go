@@ -5,78 +5,119 @@ import (
 	"fmt"
 	"io"
 	"net"
-	nethttp "net/http"
 	"strconv"
+	"sync"
 
 	"github.com/goodylili/mountabo/internal/usecase"
+	"golang.org/x/crypto/ssh"
 )
 
 var _ usecase.DashboardTunnel = (*Client)(nil)
 
-// Proxy dials 127.0.0.1:port on the server through the established SSH
-// connection and speaks HTTP to the loopback-bound monitoring tool there,
-// returning its response. The SSH client's Dial gives an in-tunnel net.Conn, so
-// an http.Transport that dials through it reaches the tool without the tool ever
-// being exposed off the box. Only the request the caller built is sent; nothing
-// runs on the server.
-func (c *Client) Proxy(ctx context.Context, t usecase.SSHTarget, port int, req usecase.DashboardRequest) (usecase.DashboardResponse, error) {
+// OpenTunnel sets up an SSH local port-forward (the `ssh -L` model): it binds a
+// listener to an ephemeral 127.0.0.1 port on this machine and, for every
+// connection it accepts, dials 127.0.0.1:port on the server through the
+// established SSH connection and copies bytes both directions until either side
+// closes. The listener stays on loopback, so the forward is never exposed off
+// this machine; the SSH client is kept alive for the listener's lifetime and
+// closed by the returned closer. Because it forwards raw TCP, HTTP and
+// websockets ride through transparently and the tool is served at the root of
+// the local port.
+func (c *Client) OpenTunnel(ctx context.Context, t usecase.SSHTarget, port int) (string, func() error, error) {
 	client, _, err := c.dial(ctx, t)
 	if err != nil {
-		return usecase.DashboardResponse{}, err
+		return "", nil, err
 	}
 
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	// One transport per request, dialing the fixed loopback addr through the SSH
-	// connection. CloseIdleConnections + closing the ssh client happen once the
-	// response body is consumed, via a wrapper around the body.
-	transport := &nethttp.Transport{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return client.Dial("tcp", addr)
-		},
-	}
-
-	target := "http://" + addr + req.Path
-	httpReq, err := nethttp.NewRequestWithContext(ctx, req.Method, target, req.Body)
+	// Loopback only: the port is ephemeral (:0) and never bound to a routable
+	// interface, so nothing off this machine can reach the forward.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = client.Close()
-		return usecase.DashboardResponse{}, fmt.Errorf("build dashboard request: %w", err)
+		return "", nil, fmt.Errorf("open local tunnel listener: %w", err)
 	}
-	for key, vals := range req.Header {
-		for _, v := range vals {
-			httpReq.Header.Add(key, v)
+
+	remoteAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	fwd := &forwarder{
+		listener: listener,
+		client:   client,
+		remote:   remoteAddr,
+		done:     make(chan struct{}),
+	}
+	go fwd.serve()
+
+	return listener.Addr().String(), fwd.close, nil
+}
+
+// forwarder accepts connections on a loopback listener and forwards each through
+// the SSH client to a fixed remote loopback address. It owns the listener and the
+// SSH client for its lifetime; close stops accepting and tears both down.
+type forwarder struct {
+	listener net.Listener
+	client   *ssh.Client
+	remote   string
+
+	closeOnce sync.Once
+	done      chan struct{}
+	wg        sync.WaitGroup
+}
+
+// serve accepts until the listener is closed, handling each connection in its own
+// goroutine tracked by the wait group so close can drain them.
+func (f *forwarder) serve() {
+	for {
+		local, err := f.listener.Accept()
+		if err != nil {
+			return // listener closed by close(), or a fatal accept error
 		}
+		f.wg.Add(1)
+		go func() {
+			defer f.wg.Done()
+			f.handle(local)
+		}()
 	}
-	// Host header is the loopback addr the tool expects, not mountabo's.
-	httpReq.Host = addr
+}
 
-	resp, err := transport.RoundTrip(httpReq) //nolint:bodyclose // body is closed by the dashboardBody wrapper the caller closes
+// handle dials the remote loopback address through the SSH connection and pipes
+// bytes both ways until either side closes. If the SSH dial fails (the tunnel is
+// going away or the tool is not listening), the local connection is dropped.
+func (f *forwarder) handle(local net.Conn) {
+	defer func() { _ = local.Close() }()
+
+	remote, err := f.client.Dial("tcp", f.remote)
 	if err != nil {
-		_ = client.Close()
-		return usecase.DashboardResponse{}, fmt.Errorf("proxy to %s: %w", addr, err)
+		return
 	}
+	defer func() { _ = remote.Close() }()
 
-	return usecase.DashboardResponse{
-		Status: resp.StatusCode,
-		Header: resp.Header,
-		// Closing the body also closes the SSH connection and drops the transport's
-		// idle connections, so a single dashboard request owns its whole tunnel.
-		Body: &dashboardBody{body: resp.Body, transport: transport, client: client},
-	}, nil
+	// Copy in both directions; the first side to close ends the pair.
+	pipeDone := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(remote, local)
+		pipeDone <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(local, remote)
+		pipeDone <- struct{}{}
+	}()
+
+	select {
+	case <-pipeDone:
+	case <-f.done:
+	}
 }
 
-// dashboardBody ties the proxied response body's lifetime to the SSH tunnel it
-// rode in on: closing it closes the body, the transport's idle connections, and
-// the SSH client, so nothing leaks once the response is relayed.
-type dashboardBody struct {
-	body      io.ReadCloser
-	transport *nethttp.Transport
-	client    interface{ Close() error }
-}
-
-func (d *dashboardBody) Read(p []byte) (int, error) { return d.body.Read(p) }
-
-func (d *dashboardBody) Close() error {
-	_ = d.body.Close()
-	d.transport.CloseIdleConnections()
-	return d.client.Close()
+// close stops accepting new connections, waits for in-flight forwards to drain,
+// and closes the SSH client. It is idempotent.
+func (f *forwarder) close() error {
+	var err error
+	f.closeOnce.Do(func() {
+		close(f.done)
+		err = f.listener.Close()
+		f.wg.Wait()
+		if cerr := f.client.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	})
+	return err
 }

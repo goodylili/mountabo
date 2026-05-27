@@ -39,7 +39,7 @@ export type Server = {
     ping: string;
     sshPort: number;
   };
-  // Applied hardening option ids (incl. monitoring tools like "netdata"), so the
+  // Applied hardening option ids (incl. monitoring tools like "uptime-kuma"), so the
   // monitor can show which tools are set up and offer to install the rest.
   options?: string[];
 };

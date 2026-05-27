@@ -39,7 +39,7 @@ import {
 import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetchServerLogs } from "@/lib/server-logs";
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
-import { type DashboardTool, dashboardPath, installedDashboards } from "@/lib/dashboards";
+import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -53,13 +53,10 @@ const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 const STEP_POLL_MS = 4000;
 
 // The self-hosted monitoring tools mountabo can install (hardening option ids),
-// with where each lives once set up. The operator now picks any subset to
-// enable, rather than the whole bundle.
+// with where each lives once set up. Only Uptime Kuma is supported; it is
+// reached through an SSH local port-forward tunnel the backend opens.
 const MONITORING_TOOLS = [
-  { id: "netdata", label: "Netdata", access: "metrics dashboard, 127.0.0.1:19999 over an ssh tunnel" },
-  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor, 127.0.0.1:3001" },
-  { id: "ntfy", label: "ntfy", access: "push alerts, 127.0.0.1:8080" },
-  { id: "journald-persistent", label: "Persistent logs", access: "system logs kept across reboots" },
+  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor, 127.0.0.1:3001 through an ssh tunnel" },
 ];
 
 export function MonitorView({
@@ -113,9 +110,11 @@ export function MonitorView({
     | { server: ServerView; mode: "remove"; host: string }
     | null
   >(null);
-  // The add-domain preview (nginx config + script) for the open gate.
-  const [domainPreview, setDomainPreview] = useState<DomainPreview | null>(null);
-  const [domainPreviewLoading, setDomainPreviewLoading] = useState(false);
+  // The add-domain preview (nginx config + script), keyed by the host it was
+  // fetched for. Keying by host means a stale preview from a previous host is
+  // never shown and the effect never resets state synchronously; data null means
+  // the fetch was attempted but returned nothing.
+  const [previewState, setPreviewState] = useState<{ host: string; data: DomainPreview | null } | null>(null);
 
   const liveCount = deployments.filter((d) => d.status === "live").length;
   const openDeployment = deployments.find((d) => d.app === open);
@@ -133,27 +132,28 @@ export function MonitorView({
   }, [openServerId, metrics]);
 
   // When the add-domain gate opens, fetch the exact nginx config + script the
-  // backend would write, so the operator sees precisely what runs before it does.
+  // backend would write, so the operator sees precisely what runs before it
+  // does. State is only set in the resolved callback (never synchronously in the
+  // effect body); staleness is handled by keying the result to the host.
   useEffect(() => {
-    if (!confirmDomain || confirmDomain.mode !== "add") {
-      setDomainPreview(null);
-      setDomainPreviewLoading(false);
-      return;
-    }
+    if (!confirmDomain || confirmDomain.mode !== "add") return;
+    const host = confirmDomain.value.host;
     const ctrl = new AbortController();
-    setDomainPreview(null);
-    setDomainPreviewLoading(true);
     fetchDomainPreview(confirmDomain.value, ctrl.signal)
       .then((res) => {
-        if (ctrl.signal.aborted) return;
-        if (!("error" in res)) setDomainPreview(res);
+        if (!ctrl.signal.aborted) setPreviewState({ host, data: "error" in res ? null : res });
       })
-      .catch(() => {})
-      .finally(() => {
-        if (!ctrl.signal.aborted) setDomainPreviewLoading(false);
+      .catch(() => {
+        if (!ctrl.signal.aborted) setPreviewState({ host, data: null });
       });
     return () => ctrl.abort();
   }, [confirmDomain]);
+
+  // Derived preview for the open add-domain gate: the data when it is for the
+  // current host, and a loading flag while this host's fetch is still pending.
+  const addHost = confirmDomain?.mode === "add" ? confirmDomain.value.host : null;
+  const domainPreview = addHost !== null && previewState?.host === addHost ? previewState.data : null;
+  const domainPreviewLoading = addHost !== null && previewState?.host !== addHost;
 
   function refresh() {
     setMetrics({}); // drop cached metrics so the open server re-reads
@@ -596,7 +596,7 @@ function ExpandedCard({
         {/* per-tool monitoring install */}
         <CollapsibleSection
           title="monitoring tools"
-          hint="install netdata, uptime kuma, ntfy or persistent logs"
+          hint="install uptime kuma"
           open={sections.monitoring}
           onToggle={() => toggle("monitoring")}
         >
@@ -687,11 +687,12 @@ function CollapsibleSection({
 }
 
 // DashboardsPanel shows each installed monitoring tool's dashboard, reached
-// through the backend's SSH-tunneled reverse proxy (the tools bind to the
-// server's loopback, so they are never exposed publicly). Netdata embeds in an
-// iframe; tools that lean on websockets (Uptime Kuma, ntfy) get a clear link
-// panel with a one-line note instead of a broken iframe. It only renders once
-// the section is open so an embedded dashboard is not loaded while hidden.
+// through an SSH local port-forward tunnel the backend opens on demand (the tool
+// binds to the server's loopback, so it is never exposed publicly). When the
+// section is open it asks the backend to open the tunnel, gets back a local
+// http://127.0.0.1:<port>/ URL, and loads it straight in an iframe: because the
+// tunnel carries raw TCP, the tool is served at root and its websockets connect
+// directly. It also offers an "open in a tab" link to that same local URL.
 function DashboardsPanel({
   serverId,
   dashboards,
@@ -703,41 +704,95 @@ function DashboardsPanel({
 }) {
   return (
     <div className="space-y-5">
-      {dashboards.map((tool) => {
-        const href = dashboardPath(serverId, tool.id);
-        return (
-          <div key={tool.id} className="overflow-hidden rounded-xl border border-line bg-surface">
-            <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
-              <span className="flex items-center gap-2.5">
-                <span className="h-2 w-2 rounded-full bg-lime" />
-                <span className="text-[15px] font-medium text-cream">{tool.label}</span>
-              </span>
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] text-lime transition-colors hover:bg-lime/10"
-              >
-                open in a tab <ExternalLink />
-              </a>
-            </div>
-            {tool.embed ? (
-              active ? (
-                <iframe
-                  src={href}
-                  title={`${tool.label} dashboard`}
-                  className="h-[520px] w-full border-0 bg-black/40"
-                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                />
-              ) : (
-                <div className="h-[520px] bg-black/40" />
-              )
-            ) : (
-              <p className="px-5 py-5 text-[14px] leading-7 text-body">{tool.note}</p>
-            )}
-          </div>
-        );
-      })}
+      {dashboards.map((tool) => (
+        <DashboardCard key={tool.id} serverId={serverId} tool={tool} active={active} />
+      ))}
+    </div>
+  );
+}
+
+// DashboardCard opens (and reuses) one tool's tunnel when its section is active,
+// then loads the returned local URL in an iframe. It surfaces an honest opening
+// state and an error state rather than a silently broken frame.
+function DashboardCard({
+  serverId,
+  tool,
+  active,
+}: {
+  serverId: string;
+  tool: DashboardTool;
+  active: boolean;
+}) {
+  // url is the local tunnel address once open; errored is set when it could not
+  // be opened. "opening" is derived (active, no url, not errored), so the effect
+  // never sets state synchronously. nonce re-triggers the open on retry.
+  const [url, setUrl] = useState<string | null>(null);
+  const [errored, setErrored] = useState(false);
+  const [nonce, setNonce] = useState(0);
+
+  // Open the tunnel the first time the section becomes active. The backend
+  // reuses an existing tunnel for the same (server, tool) pair, so re-opening is
+  // cheap. setState only runs once the fetch resolves, never synchronously.
+  useEffect(() => {
+    if (!active || url !== null || errored) return;
+    const ctrl = new AbortController();
+    openDashboard(serverId, tool.id, ctrl.signal).then((res) => {
+      if (ctrl.signal.aborted) return;
+      if (res) setUrl(res.url);
+      else setErrored(true);
+    });
+    return () => ctrl.abort();
+  }, [active, serverId, tool.id, url, errored, nonce]);
+
+  function retry() {
+    setUrl(null);
+    setErrored(false);
+    setNonce((n) => n + 1);
+  }
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-line bg-surface">
+      <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+        <span className="flex items-center gap-2.5">
+          <span className="h-2 w-2 rounded-full bg-lime" />
+          <span className="text-[15px] font-medium text-cream">{tool.label}</span>
+        </span>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] text-lime transition-colors hover:bg-lime/10"
+          >
+            open in a tab <ExternalLink />
+          </a>
+        )}
+      </div>
+      {url ? (
+        <iframe
+          src={url}
+          title={`${tool.label} dashboard`}
+          className="h-[520px] w-full border-0 bg-black/40"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+        />
+      ) : errored ? (
+        <div className="flex h-[200px] flex-col items-center justify-center gap-3 bg-black/40 px-5 text-center">
+          <p className="text-[14px] leading-7 text-body">
+            could not open the {tool.label} tunnel over ssh. the server may be unreachable, or the tool may
+            not be running.
+          </p>
+          <button
+            onClick={retry}
+            className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] text-lime transition-colors hover:bg-lime/10"
+          >
+            <Refresh /> try again
+          </button>
+        </div>
+      ) : (
+        <div className="flex h-[200px] items-center justify-center bg-black/40">
+          <p className="text-[13px] text-muted">opening the dashboard through the ssh tunnel…</p>
+        </div>
+      )}
     </div>
   );
 }

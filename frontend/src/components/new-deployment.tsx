@@ -90,10 +90,11 @@ export function NewDeployment({
     | { server: ServerView; mode: "remove"; host: string }
     | null
   >(null);
-  // The fetched add-domain preview (nginx config + script) for the open gate,
-  // and a flag while it loads. Removing a domain needs no preview.
-  const [domainPreview, setDomainPreview] = useState<DomainPreview | null>(null);
-  const [domainPreviewLoading, setDomainPreviewLoading] = useState(false);
+  // The fetched add-domain preview (nginx config + script), keyed by the host it
+  // was fetched for, so a stale preview is never shown and the effect never
+  // resets state synchronously. data null means the fetch returned nothing.
+  // Removing a domain needs no preview.
+  const [previewState, setPreviewState] = useState<{ host: string; data: DomainPreview | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ServerView | null>(null);
 
   function setServerStatus(id: string, status: ServerStatus) {
@@ -255,25 +256,24 @@ export function NewDeployment({
   // backend would write, so the operator sees precisely what will run before
   // anything touches the server. Removing a domain needs no preview.
   useEffect(() => {
-    if (!confirmDomain || confirmDomain.mode !== "add") {
-      setDomainPreview(null);
-      setDomainPreviewLoading(false);
-      return;
-    }
+    if (!confirmDomain || confirmDomain.mode !== "add") return;
+    const host = confirmDomain.value.host;
     const ctrl = new AbortController();
-    setDomainPreview(null);
-    setDomainPreviewLoading(true);
     fetchDomainPreview(confirmDomain.value, ctrl.signal)
       .then((res) => {
-        if (ctrl.signal.aborted) return;
-        if (!("error" in res)) setDomainPreview(res);
+        if (!ctrl.signal.aborted) setPreviewState({ host, data: "error" in res ? null : res });
       })
-      .catch(() => {}) // includes AbortError; the gate falls back to a step list
-      .finally(() => {
-        if (!ctrl.signal.aborted) setDomainPreviewLoading(false);
+      .catch(() => {
+        if (!ctrl.signal.aborted) setPreviewState({ host, data: null });
       });
     return () => ctrl.abort();
   }, [confirmDomain]);
+
+  // Derived preview for the open add-domain gate: the data when it is for the
+  // current host, and a loading flag while this host's fetch is still pending.
+  const addHost = confirmDomain?.mode === "add" ? confirmDomain.value.host : null;
+  const domainPreview = addHost !== null && previewState?.host === addHost ? previewState.data : null;
+  const domainPreviewLoading = addHost !== null && previewState?.host !== addHost;
 
   // ⌘K / ctrl-K focuses the palette; Enter continues when both are picked.
   useEffect(() => {

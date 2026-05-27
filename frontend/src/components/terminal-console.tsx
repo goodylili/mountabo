@@ -36,6 +36,9 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
   // The command queued behind the confirmation gate, or null when the gate is
   // closed. Nothing runs until the operator confirms here.
   const [pending, setPending] = useState<string | null>(null);
+  // Express mode runs commands immediately, skipping the per-command confirm.
+  // Off by default, so the safe path (confirm each command) is the default.
+  const [express, setExpress] = useState(false);
 
   const selected = ready.find((s) => s.id === serverId) ?? null;
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -48,20 +51,29 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
     });
   }
 
-  // ask opens the confirmation gate for the current command. Nothing is sent yet.
+  // ask runs the current command. In express mode it executes immediately; with
+  // express off it opens the confirmation gate first and nothing is sent yet.
   function ask() {
     const trimmed = command.trim();
     if (!trimmed || !serverId || running) return;
+    if (express) {
+      void execute(trimmed);
+      return;
+    }
     setPending(trimmed);
   }
 
-  // confirmRun is the only path that actually sends a command to the server,
-  // reached only after the operator confirms in the gate.
-  async function confirmRun() {
+  // confirmRun runs the gated command after the operator confirms.
+  function confirmRun() {
     const cmd = pending;
     setPending(null);
-    if (!cmd || !serverId) return;
+    void execute(cmd ?? "");
+  }
 
+  // execute is the only path that actually sends a command to the server,
+  // reached from the confirm gate or directly in express mode.
+  async function execute(cmd: string) {
+    if (!cmd || !serverId) return;
     setRunning(true);
     setEntries((prev) => [...prev, { kind: "command", text: cmd }]);
     setCommand("");
@@ -96,7 +108,8 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
       </h1>
       <p className="mt-2 max-w-2xl text-[13px] leading-6 text-body">
         Pick one of your set-up servers, type a shell command, and see its output and exit status.
-        Commands run as the mountabo user over SSH. Every command is confirmed before it runs.
+        Commands run as the mountabo user over SSH. Each command is confirmed before it runs, unless
+        you turn on express mode.
       </p>
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -106,6 +119,20 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
             connected as <span className="text-cream">mountabo</span> on {selected.ip}
           </span>
         )}
+        <button
+          type="button"
+          onClick={() => setExpress((v) => !v)}
+          aria-pressed={express}
+          title="Express mode runs commands immediately, without confirming each one."
+          className={`flex items-center gap-2 rounded-md border px-3 py-1.5 text-[12px] font-medium transition-colors sm:ml-auto ${
+            express
+              ? "border-lime/50 bg-lime/[0.08] text-lime"
+              : "border-line text-muted hover:border-line-strong hover:text-cream"
+          }`}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${express ? "bg-lime" : "bg-muted"}`} />
+          express mode {express ? "on" : "off"}
+        </button>
       </div>
 
       <CommandConsole
@@ -325,7 +352,7 @@ function AIHelper({
                 use this command
               </button>
               <p className="mt-2 text-[11px] text-faint">
-                this fills the console above so you can review it, then confirm before it runs.
+                this fills the console above so you can review it, then run it.
               </p>
             </>
           ) : (

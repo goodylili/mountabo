@@ -157,10 +157,7 @@ var SetupOptions = []SetupOption{
 	{ID: "fail2ban", Category: "SSH", Name: "fail2ban", Description: "Temporarily ban IPs after repeated failed SSH logins, to blunt brute-force. Can briefly lock you out if you mistype your own login several times."},
 	{ID: "crowdsec", Category: "SSH", Name: "CrowdSec", Description: "Modern fail2ban with community-shared blocklists that block IPs flagged across the network. Better signal, heavier; the shared list occasionally bans something unexpected."},
 
-	{ID: "netdata", Category: "Monitoring", Name: "Netdata (local)", Description: "Real-time CPU/RAM/disk/network/Docker dashboard, bound to 127.0.0.1:19999. Reach it via an SSH tunnel or a reverse proxy with auth."},
 	{ID: "uptime-kuma", Category: "Monitoring", Name: "Uptime Kuma", Description: "Self-hosted uptime monitor with notifications, on 127.0.0.1:3001. Runs on the box it monitors, so host critical alerts elsewhere too."},
-	{ID: "ntfy", Category: "Monitoring", Name: "ntfy", Description: "Self-hosted push notifications on 127.0.0.1:8080; pipe alerts in via curl. Dead simple; self-host avoids the public server's rate limits."},
-	{ID: "journald-persistent", Category: "Monitoring", Name: "Persistent journald logs", Description: "Keep system logs across reboots (capped at 2G) so postmortems are possible."},
 
 	{ID: "auto-updates", Category: "System", Name: "Automatic security updates", Description: "Install unattended-upgrades so security patches apply on their own. Keeps the box patched; may occasionally trigger a reboot."},
 	{ID: "sysctl", Category: "System", Name: "sysctl hardening", Description: "Kernel knobs: SYN cookies, restricted dmesg, reverse-path filtering, no ICMP redirects. Free defense-in-depth."},

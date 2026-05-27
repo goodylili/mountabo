@@ -3,25 +3,23 @@ package usecase
 import (
 	"context"
 	"errors"
-	"io"
-	nethttp "net/http"
-	"strings"
 	"testing"
 )
 
-// fakeTunnel records the port it was asked to proxy and returns a canned reply.
+// fakeTunnel records the port it was asked to forward and returns a canned local
+// address, tracking whether its closer ran.
 type fakeTunnel struct {
 	port   int
 	called bool
+	closed bool
 }
 
-func (f *fakeTunnel) Proxy(_ context.Context, _ SSHTarget, port int, _ DashboardRequest) (DashboardResponse, error) {
+func (f *fakeTunnel) OpenTunnel(_ context.Context, _ SSHTarget, port int) (string, func() error, error) {
 	f.port = port
 	f.called = true
-	return DashboardResponse{
-		Status: nethttp.StatusOK,
-		Header: nethttp.Header{},
-		Body:   io.NopCloser(strings.NewReader("ok")),
+	return "127.0.0.1:54321", func() error {
+		f.closed = true
+		return nil
 	}, nil
 }
 
@@ -29,59 +27,107 @@ func readyServerWith(options ...string) Server {
 	return Server{ID: "s1", IP: "10.0.0.1", SSHPort: 22, Status: StatusReady, Options: options}
 }
 
-func TestDashboard_ProxiesInstalledTool(t *testing.T) {
+func TestDashboard_OpensTunnelForInstalledTool(t *testing.T) {
 	store := newMemServerStore()
-	_ = store.Save(readyServerWith("firewall", "netdata"))
+	_ = store.Save(readyServerWith("firewall", "uptime-kuma"))
 	vault := newFakeVault()
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
 	tunnel := &fakeTunnel{}
 	svc := NewServerDashboardService(store, vault, tunnel)
 
-	resp, err := svc.Proxy(context.Background(), "s1", "netdata", DashboardRequest{Method: "GET", Path: "/"})
+	url, err := svc.Open(context.Background(), "s1", "uptime-kuma")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_ = resp.Body.Close()
-	if !tunnel.called || tunnel.port != 19999 {
-		t.Fatalf("expected netdata port 19999 to be proxied, got called=%v port=%d", tunnel.called, tunnel.port)
+	if !tunnel.called || tunnel.port != 3001 {
+		t.Fatalf("expected uptime-kuma port 3001 to be forwarded, got called=%v port=%d", tunnel.called, tunnel.port)
+	}
+	if url != "http://127.0.0.1:54321/" {
+		t.Fatalf("expected local tunnel url, got %q", url)
+	}
+}
+
+func TestDashboard_ReusesOpenTunnel(t *testing.T) {
+	store := newMemServerStore()
+	_ = store.Save(readyServerWith("uptime-kuma"))
+	vault := newFakeVault()
+	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
+	tunnel := &countingTunnel{}
+	svc := NewServerDashboardService(store, vault, tunnel)
+
+	if _, err := svc.Open(context.Background(), "s1", "uptime-kuma"); err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if _, err := svc.Open(context.Background(), "s1", "uptime-kuma"); err != nil {
+		t.Fatalf("second open: %v", err)
+	}
+	if tunnel.opens != 1 {
+		t.Fatalf("expected the open tunnel to be reused (1 open), got %d", tunnel.opens)
+	}
+}
+
+func TestDashboard_CloseTearsDownTunnels(t *testing.T) {
+	store := newMemServerStore()
+	_ = store.Save(readyServerWith("uptime-kuma"))
+	vault := newFakeVault()
+	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
+	tunnel := &fakeTunnel{}
+	svc := NewServerDashboardService(store, vault, tunnel)
+
+	if _, err := svc.Open(context.Background(), "s1", "uptime-kuma"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if !tunnel.closed {
+		t.Fatal("expected the tunnel to be closed on Close")
 	}
 }
 
 func TestDashboard_RejectsUnknownTool(t *testing.T) {
 	store := newMemServerStore()
-	_ = store.Save(readyServerWith("journald-persistent"))
+	_ = store.Save(readyServerWith("uptime-kuma"))
 	tunnel := &fakeTunnel{}
 	svc := NewServerDashboardService(store, newFakeVault(), tunnel)
 
-	// journald-persistent has no web UI, so it is not a proxyable tool.
-	_, err := svc.Proxy(context.Background(), "s1", "journald-persistent", DashboardRequest{Method: "GET", Path: "/"})
+	// netdata is no longer a known tool, so it is rejected before any tunnel.
+	_, err := svc.Open(context.Background(), "s1", "netdata")
 	if !errors.Is(err, ErrUnknownTool) {
 		t.Fatalf("expected ErrUnknownTool, got %v", err)
 	}
 	if tunnel.called {
-		t.Fatal("tunnel should not be dialed for an unknown tool")
+		t.Fatal("tunnel should not be opened for an unknown tool")
 	}
 }
 
 func TestDashboard_RejectsToolNotInstalled(t *testing.T) {
 	store := newMemServerStore()
-	_ = store.Save(readyServerWith("firewall")) // netdata not installed
+	_ = store.Save(readyServerWith("firewall")) // uptime-kuma not installed
 	tunnel := &fakeTunnel{}
 	svc := NewServerDashboardService(store, newFakeVault(), tunnel)
 
-	_, err := svc.Proxy(context.Background(), "s1", "netdata", DashboardRequest{Method: "GET", Path: "/"})
+	_, err := svc.Open(context.Background(), "s1", "uptime-kuma")
 	if !errors.Is(err, ErrToolNotInstalled) {
 		t.Fatalf("expected ErrToolNotInstalled, got %v", err)
 	}
 	if tunnel.called {
-		t.Fatal("tunnel should not be dialed when the tool is not installed")
+		t.Fatal("tunnel should not be opened when the tool is not installed")
 	}
 }
 
 func TestDashboard_RejectsUnknownServer(t *testing.T) {
 	svc := NewServerDashboardService(newMemServerStore(), newFakeVault(), &fakeTunnel{})
-	_, err := svc.Proxy(context.Background(), "missing", "netdata", DashboardRequest{Method: "GET", Path: "/"})
+	_, err := svc.Open(context.Background(), "missing", "uptime-kuma")
 	if !errors.Is(err, ErrServerNotFound) {
 		t.Fatalf("expected ErrServerNotFound, got %v", err)
 	}
+}
+
+// countingTunnel counts how many times a tunnel was opened, to verify reuse.
+type countingTunnel struct{ opens int }
+
+func (c *countingTunnel) OpenTunnel(_ context.Context, _ SSHTarget, _ int) (string, func() error, error) {
+	c.opens++
+	return "127.0.0.1:54321", func() error { return nil }, nil
 }

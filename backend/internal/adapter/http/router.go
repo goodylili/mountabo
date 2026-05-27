@@ -18,7 +18,7 @@ import nethttp "net/http"
 //	GET    /api/servers/{id}/setup   run the bootstrap, streaming progress (SSE)
 //	GET    /api/servers/{id}/ports   list ports already listening on the server
 //	GET    /api/servers/{id}/logs    the deployed app's recent logs (over SSH)
-//	ANY    /api/servers/{id}/dashboard/{tool}/{rest...}  reverse proxy a loopback monitoring dashboard (Netdata/Uptime Kuma/ntfy) over the server's SSH tunnel
+//	POST   /api/servers/{id}/dashboard/{tool}/open  open an SSH local port-forward tunnel to a loopback monitoring dashboard (Uptime Kuma), returning its local URL
 //	GET    /api/servers/domains/preview      render a domain's nginx config + script (no side effects)
 //	GET    /api/servers/{id}/domains/add     point a domain at an app port, streaming (SSE)
 //	GET    /api/servers/{id}/domains/remove  tear a domain's nginx + TLS down, streaming (SSE)
@@ -47,10 +47,10 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/servers/{id}/ports", sv.Ports)
 	mux.HandleFunc("GET /api/servers/{id}/metrics", sv.Metrics)
 	mux.HandleFunc("GET /api/servers/{id}/logs", sv.Logs)
-	// The dashboard proxy matches every method and both the tool root and any
-	// deeper asset/path under it, so a tool's whole UI loads through the tunnel.
-	mux.HandleFunc("/api/servers/{id}/dashboard/{tool}/{rest...}", sv.Dashboard)
-	mux.HandleFunc("/api/servers/{id}/dashboard/{tool}", sv.Dashboard)
+	// Opening a dashboard establishes an SSH local port-forward tunnel and returns
+	// the loopback URL the browser loads directly (raw TCP, so HTTP + websockets
+	// both work and the tool is served at root).
+	mux.HandleFunc("POST /api/servers/{id}/dashboard/{tool}/open", sv.OpenDashboard)
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
 	mux.HandleFunc("GET /api/servers/domains/preview", sv.DomainsPreview)
 	mux.HandleFunc("GET /api/servers/{id}/domains/add", sv.AddDomain)
