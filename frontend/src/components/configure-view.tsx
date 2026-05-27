@@ -153,6 +153,13 @@ export function ConfigureView({
   // the repository or server unseen.
   const [confirmDeploy, setConfirmDeploy] = useState<PreviewRequest | null>(null);
 
+  // The operator only sees their own secrets. The server connection secrets
+  // (SERVER_HOST, SERVER_SSH_KEY, SERVER_USER, DEPLOY_DIR) are managed: mountabo
+  // sets them on the repo automatically, so they are abstracted away here and
+  // never listed, only summarised as "set automatically".
+  const userSecrets = preview?.secrets.filter((s) => !s.managed) ?? [];
+  const managedSecretCount = (preview?.secrets.length ?? 0) - userSecrets.length;
+
   // Any non-empty env var key that isn't a valid name blocks deploy.
   const envInvalid = envVars.some((v) => {
     const k = v.key.trim();
@@ -206,9 +213,10 @@ export function ConfigureView({
   }
 
   return (
-    <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-1 gap-x-12 gap-y-10 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_1fr] lg:px-8 lg:py-10">
-      {/* ── left: the walkthrough form ── */}
-      <div className="rise flex flex-col">
+    <main className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col gap-10 px-4 py-8 sm:px-6 lg:flex-row lg:items-start lg:gap-12 lg:px-8 lg:py-10">
+      {/* ── left: the walkthrough form. Fixed width and wider than the preview,
+          so it keeps its size across viewports rather than stretching. ── */}
+      <div className="rise flex flex-col lg:w-[600px] lg:shrink-0">
         <p className="label">step 02 / 02 · configure</p>
         <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] tracking-tight text-cream sm:text-5xl sm:leading-[1.02]">
           configure your deployment.
@@ -462,8 +470,8 @@ export function ConfigureView({
             {deployed ? "re-deploy configuration" : "deploy"}
           </button>
           <p className="mt-2 text-center text-[11px] text-muted">
-            commits these files and sets {preview?.secrets.length ?? 0} secrets on {source.owner}/{source.name}. push to{" "}
-            {branch} afterwards to ship.
+            commits these files and sets your {userSecrets.length} environment variables as encrypted secrets on{" "}
+            {source.owner}/{source.name}. push to {branch} afterwards to ship.
           </p>
           {previewError && <p className="mt-2 text-center text-[11px] text-red-300">{previewError}</p>}
         </div>
@@ -479,17 +487,17 @@ export function ConfigureView({
               <span className="text-cream">
                 {source.owner}/{source.name}
               </span>{" "}
-              on the <span className="text-cream">{branch}</span> branch and set{" "}
-              {preview?.secrets.length ?? 0} encrypted Actions secrets. when the workflow runs it
-              connects to <span className="text-cream">{server.name}</span> over SSH and runs the
-              deploy script in <span className="text-cream">{deployDir}</span>. nothing runs until you
-              confirm.
+              on the <span className="text-cream">{branch}</span> branch and set your{" "}
+              {userSecrets.length} environment variables as encrypted Actions secrets. the server
+              connection is set automatically. when the workflow runs it connects to{" "}
+              <span className="text-cream">{server.name}</span> over SSH and runs the deploy script in{" "}
+              <span className="text-cream">{deployDir}</span>. nothing runs until you confirm.
             </>
           }
           stepsLabel="exact files and script that will be written, then run on the server"
           steps={
             preview
-              ? `# ${preview.workflowPath}\n${preview.workflow}\n\n# deploy.sh\n${preview.deployScript}\n\n# Actions secrets set on ${source.owner}/${source.name}\n${preview.secrets.map((s) => `${s.name}  (${s.managed ? "auto" : "your value"})`).join("\n")}`
+              ? `# ${preview.workflowPath}\n${preview.workflow}\n\n# deploy.sh\n${preview.deployScript}\n\n# your environment variables, set as encrypted secrets on ${source.owner}/${source.name}\n${userSecrets.map((s) => s.name).join("\n") || "(none)"}\n\n# the server connection is set automatically by mountabo (${managedSecretCount} managed secrets, not shown)`
               : undefined
           }
           loading={!preview}
@@ -515,8 +523,8 @@ export function ConfigureView({
         />
       )}
 
-      {/* ── right: live preview ── */}
-      <div className="rise flex flex-col" style={{ animationDelay: "80ms" }}>
+      {/* ── right: live preview. Flexible and narrower than the fixed form. ── */}
+      <div className="rise flex min-w-0 flex-1 flex-col lg:sticky lg:top-6" style={{ animationDelay: "80ms" }}>
         <div className="flex items-center gap-1 text-[12px]">
           <PreviewTab active={tab === "workflow"} onClick={() => setTab("workflow")}>
             {preview ? preview.workflowPath.split("/").pop() : "workflow"}
@@ -525,7 +533,7 @@ export function ConfigureView({
             deploy.sh
           </PreviewTab>
           <PreviewTab active={tab === "secrets"} onClick={() => setTab("secrets")}>
-            secrets ({preview?.secrets.length ?? 0})
+            secrets ({userSecrets.length})
           </PreviewTab>
         </div>
 
@@ -541,19 +549,26 @@ export function ConfigureView({
               {tab === "secrets" && (
                 <div className="overflow-hidden rounded-xl border border-line bg-surface">
                   <div className="border-b border-line px-5 py-3 text-[12px] text-muted">
-                    set on {source.owner}/{source.name} · actions secrets
+                    your environment variables · encrypted actions secrets
                   </div>
-                  <ul>
-                    {preview.secrets.map((s) => (
-                      <li key={s.name} className="flex items-center justify-between border-b border-line px-5 py-3 text-[13px]">
-                        <code className="text-cream">{s.name}</code>
-                        <Badge tone={s.managed ? "blue" : "lime"}>{s.managed ? "auto" : "your value"}</Badge>
-                      </li>
-                    ))}
-                  </ul>
+                  {userSecrets.length > 0 ? (
+                    <ul>
+                      {userSecrets.map((s) => (
+                        <li key={s.name} className="flex items-center justify-between border-b border-line px-5 py-3 text-[13px]">
+                          <code className="text-cream">{s.name}</code>
+                          <Badge tone="lime">your value</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="border-b border-line px-5 py-3 text-[12px] text-muted">
+                      no environment variables yet. add them on the left to set them as encrypted secrets.
+                    </p>
+                  )}
                   <p className="px-5 py-3 text-[12px] leading-5 text-muted">
-                    <code className="text-cream">SERVER_*</code> are filled from the selected server + its mountabo key.
-                    your env vars are encrypted (sealed box) before upload; values never leave your machine in the clear.
+                    your values are encrypted (sealed box) before upload; they never leave your machine in
+                    the clear. mountabo also sets the server connection automatically, you do not manage it
+                    here.
                   </p>
                 </div>
               )}
