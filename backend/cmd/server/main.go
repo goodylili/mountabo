@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	nethttp "net/http"
 	"os"
@@ -71,7 +72,15 @@ func run() error {
 	// environment/secrets (all github), reading the server record (JSON store)
 	// and mountabo's stored key (keychain). One github.Client and keychain.Store
 	// already in hand serve these too.
-	deploymentStore := repository.NewDeploymentFile(filepath.Join(cfg.DataDir, "deployments.json"))
+	//
+	// Deployments persist in SQLite (not JSON) so each deploy is tracked in an
+	// append-only event log queryable over time, not just upserted away.
+	db, err := repository.OpenSQLite(filepath.Join(cfg.DataDir, "mountabo.db"))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	deploymentStore := repository.NewDeploymentSQL(db)
 	// The deploy flow also mints a per-repo read-only deploy key: ssh generates
 	// the keypair and installs the private half on the server; github registers
 	// the public half on the repo.
