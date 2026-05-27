@@ -9,6 +9,7 @@ type RepoResponse = {
   language: string;
   pushedAt: string;
   hasDocker: boolean;
+  kind: "compose" | "docker" | "none";
 };
 
 function relativeTime(iso: string): string {
@@ -55,6 +56,7 @@ export async function getRepos(): Promise<Source[]> {
         language: r.language ? r.language.toLowerCase() : "n/a",
         private: r.private,
         hasDocker: r.hasDocker,
+        kind: r.kind ?? "none",
       }));
     } catch {
       if (attempt < 2) await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));

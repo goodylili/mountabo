@@ -51,6 +51,8 @@ export function NewDeployment({
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const [view, setView] = useState<"repos" | "servers">("repos");
   const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<"all" | "public" | "private">("all");
+  const [container, setContainer] = useState<"all" | "compose" | "docker" | "none">("all");
   const [showAddServer, setShowAddServer] = useState(false);
   const [setupTarget, setSetupTarget] = useState<ServerView | null>(null);
   const [page, setPage] = useState(0);
@@ -116,9 +118,11 @@ export function NewDeployment({
   const filteredSources = useMemo(() => {
     let list = sources;
     if (ownerFilter) list = list.filter((s) => s.owner === ownerFilter);
+    if (visibility !== "all") list = list.filter((s) => (visibility === "private" ? s.private : !s.private));
+    if (container !== "all") list = list.filter((s) => (s.kind ?? "none") === container);
     if (q) list = list.filter((s) => `${s.name} ${s.language}`.toLowerCase().includes(q));
     return list;
-  }, [sources, q, ownerFilter]);
+  }, [sources, q, ownerFilter, visibility, container]);
   // Repo lists can be large (hundreds), so paginate the sources client-side.
   // The page resets to 0 in the search handler whenever the filter changes.
   const SOURCES_PER_PAGE = 8;
@@ -227,6 +231,40 @@ export function NewDeployment({
               />
             </div>
             <span className="text-muted">↳ {filteredSources.length} visible</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-line px-5 py-2.5">
+            <span className="flex items-center gap-2">
+              <span className="text-[11px] text-faint">visibility</span>
+              <FilterChips
+                value={visibility}
+                onChange={(v) => {
+                  setVisibility(v);
+                  setPage(0);
+                }}
+                options={[
+                  { v: "all", label: "all" },
+                  { v: "public", label: "public" },
+                  { v: "private", label: "private" },
+                ]}
+              />
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="text-[11px] text-faint">container</span>
+              <FilterChips
+                value={container}
+                onChange={(v) => {
+                  setContainer(v);
+                  setPage(0);
+                }}
+                options={[
+                  { v: "all", label: "all" },
+                  { v: "compose", label: "compose" },
+                  { v: "docker", label: "docker" },
+                  { v: "none", label: "non-docker" },
+                ]}
+              />
+            </span>
           </div>
 
           <ul className="flex-1">
@@ -504,6 +542,33 @@ function applyUrl(
     }
   }
   return `/api/servers/${serverId}/options?${qs.toString()}`;
+}
+
+// FilterChips is a small segmented control: one active value out of a few.
+function FilterChips<T extends string>({
+  value,
+  onChange,
+  options,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { v: T; label: string }[];
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      {options.map((o) => (
+        <button
+          key={o.v}
+          onClick={() => onChange(o.v)}
+          className={`rounded-md px-2 py-1 text-[11px] transition-colors ${
+            value === o.v ? "bg-surface-2 text-cream" : "text-muted hover:text-cream"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
 }
 
 function ViewTab({

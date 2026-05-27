@@ -13,6 +13,9 @@ export type Source = {
   loc?: string;
   private?: boolean;
   hasDocker?: boolean;
+  // How the repo containerizes: "compose", "docker" (Dockerfile only), or
+  // "none". Drives the container filter on the deploy picker.
+  kind?: "compose" | "docker" | "none";
 };
 
 export type ServerStatus = "healthy" | "idle";
