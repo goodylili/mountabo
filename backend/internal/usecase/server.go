@@ -67,6 +67,9 @@ type Server struct {
 	// History is the record of configuration changes applied to this server,
 	// oldest first, capped to the most recent entries.
 	History []ChangeEvent `json:"history,omitempty"`
+	// Domains are the custom domains fronted by nginx + HTTPS on this server,
+	// each proxying to a local app port. Managed live via AddDomain/RemoveDomain.
+	Domains []Domain `json:"domains,omitempty"`
 }
 
 // ChangeEvent records one configuration change applied to a server: which
@@ -212,6 +215,13 @@ type OptionApplier interface {
 	ApplyOptions(ctx context.Context, t SSHTarget, add, remove []string, params map[string]map[string]string, out io.Writer) error
 }
 
+// RootRunner runs a shell script as root on an already-set-up server (connecting
+// as the mountabo user with its key, executing via sudo), streaming output to
+// out. It is the generic execution path behind domain setup and teardown.
+type RootRunner interface {
+	RunAsRoot(ctx context.Context, t SSHTarget, script string, out io.Writer) error
+}
+
 // KeyMaker generates an SSH keypair for mountabo's access to a server.
 type KeyMaker interface {
 	Generate(comment string) (privatePEM, publicKey string, err error)
@@ -256,6 +266,7 @@ type ServerService struct {
 	prober    ServerProber
 	boot      ServerBootstrapper
 	applier   OptionApplier
+	runner    RootRunner
 	keys      KeyMaker
 	localKeys LocalKeyProvider
 	vault     SecretVault
@@ -265,8 +276,8 @@ type ServerService struct {
 }
 
 // NewServerService wires the service to its ports.
-func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, applier OptionApplier, keys KeyMaker, localKeys LocalKeyProvider, vault SecretVault) *ServerService {
-	return &ServerService{store: store, prober: prober, boot: boot, applier: applier, keys: keys, localKeys: localKeys, vault: vault, settingUp: map[string]bool{}}
+func NewServerService(store ServerStore, prober ServerProber, boot ServerBootstrapper, applier OptionApplier, runner RootRunner, keys KeyMaker, localKeys LocalKeyProvider, vault SecretVault) *ServerService {
+	return &ServerService{store: store, prober: prober, boot: boot, applier: applier, runner: runner, keys: keys, localKeys: localKeys, vault: vault, settingUp: map[string]bool{}}
 }
 
 // Add connects to the server with the root password, probes its specs, and

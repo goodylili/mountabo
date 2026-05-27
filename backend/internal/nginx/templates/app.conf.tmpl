@@ -1,0 +1,16 @@
+# Managed by mountabo. HTTP virtual host for {{.ServerNames}}.
+# Serves the Let's Encrypt http-01 challenge, and sends everything else to HTTPS
+# once a certificate exists.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{.ServerNames}};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

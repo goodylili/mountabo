@@ -19,10 +19,11 @@ import {
 import { AddServerForm } from "@/components/add-server-form";
 import { OwnerDropdown } from "@/components/owner-dropdown";
 import { ServerOptions } from "@/components/server-options";
+import { ServerDomains, type DomainFormValue } from "@/components/server-domains";
 import { ServerSelect } from "@/components/server-select";
 import { StreamLog } from "@/components/stream-log";
 import type { Source } from "@/lib/data";
-import type { ServerStatus, ServerView, SetupOption } from "@/lib/servers";
+import type { Domain, ServerStatus, ServerView, SetupOption } from "@/lib/servers";
 
 const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
   ready: "blue",
@@ -62,6 +63,11 @@ export function NewDeployment({
     desired: string[];
     params: Record<string, Record<string, string>>;
   } | null>(null);
+  const [domainTarget, setDomainTarget] = useState<
+    | { server: ServerView; mode: "add"; value: DomainFormValue }
+    | { server: ServerView; mode: "remove"; host: string }
+    | null
+  >(null);
 
   function setServerStatus(id: string, status: ServerStatus) {
     setServerList((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)));
@@ -79,6 +85,33 @@ export function NewDeployment({
     setServerList((list) =>
       list.map((s) =>
         s.id === target.id ? { ...s, options: desired, history: [...(s.history ?? []), event] } : s,
+      ),
+    );
+  }
+
+  // After a domain is added (or updated), reflect it locally so the list and the
+  // www badge stay current without a refetch; re-adding the same host replaces it.
+  function recordDomainAdd(target: ServerView, value: DomainFormValue) {
+    const entry: Domain = {
+      host: value.host,
+      aliases: value.aliases,
+      upstream: value.upstream,
+      email: value.email || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    setServerList((list) =>
+      list.map((s) =>
+        s.id === target.id
+          ? { ...s, domains: [...(s.domains ?? []).filter((d) => d.host !== entry.host), entry] }
+          : s,
+      ),
+    );
+  }
+
+  function recordDomainRemove(target: ServerView, host: string) {
+    setServerList((list) =>
+      list.map((s) =>
+        s.id === target.id ? { ...s, domains: (s.domains ?? []).filter((d) => d.host !== host) } : s,
       ),
     );
   }
@@ -421,12 +454,20 @@ export function NewDeployment({
                     )}
                   </div>
                   {active && s.status === "ready" && (
-                    <ServerOptions
-                      key={`${s.id}:${(s.options ?? []).join(",")}`}
-                      server={s}
-                      catalog={catalog}
-                      onApply={(desired, params) => setApplyTarget({ server: s, desired, params })}
-                    />
+                    <>
+                      <ServerDomains
+                        key={`dom:${(s.domains ?? []).map((d) => d.host).join(",")}`}
+                        server={s}
+                        onAdd={(value) => setDomainTarget({ server: s, mode: "add", value })}
+                        onRemove={(host) => setDomainTarget({ server: s, mode: "remove", host })}
+                      />
+                      <ServerOptions
+                        key={`${s.id}:${(s.options ?? []).join(",")}`}
+                        server={s}
+                        catalog={catalog}
+                        onApply={(desired, params) => setApplyTarget({ server: s, desired, params })}
+                      />
+                    </>
                   )}
                 </li>
               );
@@ -524,8 +565,45 @@ export function NewDeployment({
         onClose={() => setApplyTarget(null)}
       />
     )}
+    {domainTarget && (
+      <StreamLog
+        title={
+          domainTarget.mode === "add"
+            ? `adding ${domainTarget.value.host}`
+            : `removing ${domainTarget.host}`
+        }
+        subtitle={domainTarget.server.ip}
+        timezone={domainTarget.server.timezone}
+        url={
+          domainTarget.mode === "add"
+            ? addDomainUrl(domainTarget.server.id, domainTarget.value)
+            : removeDomainUrl(domainTarget.server.id, domainTarget.host)
+        }
+        onDone={(ok) => {
+          if (!ok) return;
+          if (domainTarget.mode === "add") recordDomainAdd(domainTarget.server, domainTarget.value);
+          else recordDomainRemove(domainTarget.server, domainTarget.host);
+        }}
+        onClose={() => setDomainTarget(null)}
+      />
+    )}
     </>
   );
+}
+
+// Builds the add-domain SSE URL: ?host=&upstream=&aliases=&email=&staging=.
+function addDomainUrl(serverId: string, v: DomainFormValue): string {
+  const qs = new URLSearchParams();
+  qs.set("host", v.host);
+  if (v.upstream) qs.set("upstream", v.upstream);
+  if (v.aliases.length) qs.set("aliases", v.aliases.join(","));
+  if (v.email) qs.set("email", v.email);
+  if (v.staging) qs.set("staging", "1");
+  return `/api/servers/${serverId}/domains/add?${qs.toString()}`;
+}
+
+function removeDomainUrl(serverId: string, host: string): string {
+  return `/api/servers/${serverId}/domains/remove?host=${encodeURIComponent(host)}`;
 }
 
 // Builds the apply-options SSE URL: ?set=<ids>&param.<id>.<key>=<value>.

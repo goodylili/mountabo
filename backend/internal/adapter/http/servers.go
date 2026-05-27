@@ -162,6 +162,54 @@ func (h *ServersHandler) ApplyOptions(w nethttp.ResponseWriter, r *nethttp.Reque
 	})
 }
 
+// domainInput reads a DomainInput from the query string, shared by the preview
+// and add handlers. aliases is a comma-separated list; staging is truthy when
+// "1" or "true".
+func domainInput(r *nethttp.Request) usecase.DomainInput {
+	q := r.URL.Query()
+	in := usecase.DomainInput{
+		Host:     q.Get("host"),
+		Upstream: q.Get("upstream"),
+		Email:    q.Get("email"),
+		Staging:  q.Get("staging") == "1" || q.Get("staging") == "true",
+	}
+	if raw := q.Get("aliases"); raw != "" {
+		in.Aliases = strings.Split(raw, ",")
+	}
+	return in
+}
+
+// DomainsPreview renders the nginx config and setup script for a domain without
+// touching a server, so the UI can show exactly what configuring it would do.
+func (h *ServersHandler) DomainsPreview(w nethttp.ResponseWriter, r *nethttp.Request) {
+	artifacts, err := h.svc.PreviewDomain(domainInput(r))
+	if err != nil {
+		h.writeError(w, nethttp.StatusBadRequest, err.Error())
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, artifacts)
+}
+
+// AddDomain points a domain at a local app port on the server (nginx + HTTPS),
+// streaming the live setup log as SSE.
+func (h *ServersHandler) AddDomain(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	in := domainInput(r)
+	streamSSE(w, h.log, "domain is live", func(out io.Writer) error {
+		return h.svc.AddDomain(r.Context(), id, in, out)
+	})
+}
+
+// RemoveDomain tears a domain's nginx vhost and certificate back down, streaming
+// the live log as SSE.
+func (h *ServersHandler) RemoveDomain(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	host := r.URL.Query().Get("host")
+	streamSSE(w, h.log, "domain removed", func(out io.Writer) error {
+		return h.svc.RemoveDomain(r.Context(), id, host, out)
+	})
+}
+
 // streamSSE runs a long, output-producing operation and relays it as Server-Sent
 // Events: each output line is a `data:` event, ending with a terminal `done`
 // (with successMsg) or `error` event. The per-response write deadline is

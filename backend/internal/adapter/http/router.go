@@ -14,6 +14,9 @@ import nethttp "net/http"
 //	GET    /api/servers              list added servers
 //	GET    /api/servers/{id}/setup   run the bootstrap, streaming progress (SSE)
 //	GET    /api/servers/{id}/ports   list ports already listening on the server
+//	GET    /api/servers/domains/preview      render a domain's nginx config + script (no side effects)
+//	GET    /api/servers/{id}/domains/add     point a domain at an app port, streaming (SSE)
+//	GET    /api/servers/{id}/domains/remove  tear a domain's nginx + TLS down, streaming (SSE)
 //	POST   /api/deploy/preview       generate the workflow + deploy.sh + secrets (no side effects)
 //	POST   /api/servers/{id}/deploy  configure deployment of a repo, streaming (SSE)
 //	GET    /api/deployments          deploy history (configured deployments + their Actions runs)
@@ -34,6 +37,9 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/servers/{id}/ports", sv.Ports)
 	mux.HandleFunc("GET /api/servers/{id}/metrics", sv.Metrics)
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
+	mux.HandleFunc("GET /api/servers/domains/preview", sv.DomainsPreview)
+	mux.HandleFunc("GET /api/servers/{id}/domains/add", sv.AddDomain)
+	mux.HandleFunc("GET /api/servers/{id}/domains/remove", sv.RemoveDomain)
 	mux.HandleFunc("POST /api/deploy/preview", dep.Preview)
 	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)
 	mux.HandleFunc("GET /api/deployments", mon.Deployments)

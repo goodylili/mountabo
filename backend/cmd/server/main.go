@@ -62,7 +62,7 @@ func run() error {
 	// bootstrap, keygen, and port inspection.
 	sshClient := ssh.NewClient()
 	serverStore := repository.NewServerFile(filepath.Join(cfg.DataDir, "servers.json"))
-	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
+	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
 	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
 	serverMetricsSvc := usecase.NewServerMetricsService(serverStore, keyStore, sshClient)
 	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, logger)

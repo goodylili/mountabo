@@ -26,6 +26,17 @@ export type ServerView = {
   createdAt: string;
   options: string[] | null;
   history?: ChangeEvent[] | null;
+  domains?: Domain[] | null;
+};
+
+// A custom domain fronted by nginx + HTTPS on a server, proxying to a local app
+// port. Mirrors the backend Domain JSON.
+export type Domain = {
+  host: string;
+  aliases?: string[] | null;
+  upstream: string;
+  email?: string;
+  createdAt: string;
 };
 
 // A recorded configuration change applied to a server.

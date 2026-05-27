@@ -1,1 +1,30 @@
+# Managed by mountabo. HTTPS virtual host for {{.ServerNames}}.
+# Terminates TLS with the Let's Encrypt certificate and proxies to the local app.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {{.ServerNames}};
 
+    ssl_certificate     /etc/letsencrypt/live/{{.Domain}}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{.Domain}}/privkey.pem;
+
+    # Self-contained TLS settings (Mozilla intermediate), so the config does not
+    # depend on certbot's optional nginx snippet files being present.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:MozSSL:10m;
+
+    location / {
+        proxy_pass http://127.0.0.1:{{.Upstream}};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 60s;
+    }
+}

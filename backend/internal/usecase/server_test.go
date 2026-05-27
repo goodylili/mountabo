@@ -35,6 +35,17 @@ func (f *fakeApplier) ApplyOptions(_ context.Context, _ SSHTarget, add, remove [
 	return f.err
 }
 
+type fakeRunner struct {
+	script string
+	err    error
+}
+
+func (f *fakeRunner) RunAsRoot(_ context.Context, _ SSHTarget, script string, out io.Writer) error {
+	f.script = script
+	_, _ = io.WriteString(out, "==> running root script\n")
+	return f.err
+}
+
 type fakeKeyMaker struct{}
 
 func (fakeKeyMaker) Generate(string) (string, string, error) {
@@ -82,13 +93,13 @@ func (m *memServerStore) Delete(id string) error {
 }
 
 func newService(store ServerStore, vault SecretVault, boot ServerBootstrapper) *ServerService {
-	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, &fakeApplier{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	return NewServerService(store, fakeProber{specs: ServerSpecs{CPUCores: 4}}, boot, &fakeApplier{}, &fakeRunner{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
 }
 
 func TestApplyOptions_DiffsPersistsAndOrders(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	applier := &fakeApplier{}
-	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, applier, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, applier, &fakeRunner{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
 	_ = store.Save(Server{ID: "s1", IP: "1.2.3.4", SSHPort: 22, Status: StatusReady, Options: []string{"firewall"}})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY-PEM")
 
@@ -113,7 +124,7 @@ func TestApplyOptions_DiffsPersistsAndOrders(t *testing.T) {
 
 func TestApplyOptions_RecordsFailedChange(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
-	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{err: io.ErrClosedPipe}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{err: io.ErrClosedPipe}, &fakeRunner{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
 	_ = store.Save(Server{ID: "s1", Status: StatusReady, Options: nil})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
 
@@ -131,7 +142,7 @@ func TestApplyOptions_RecordsFailedChange(t *testing.T) {
 
 func TestApplyOptions_RequiresReady(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
-	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
+	svc := NewServerService(store, fakeProber{}, fakeBootstrapper{}, &fakeApplier{}, &fakeRunner{}, fakeKeyMaker{}, fakeLocalKeyProvider{}, vault)
 	_ = store.Save(Server{ID: "s1", Status: StatusProbed})
 	if err := svc.ApplyOptions(context.Background(), "s1", []string{"firewall"}, nil, io.Discard); err == nil {
 		t.Fatal("expected error applying options to a non-ready server")
