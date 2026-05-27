@@ -39,3 +39,16 @@ export function mergeEnv(existing: EnvVar[], incoming: EnvVar[]): EnvVar[] {
   }
   return out.length ? out : [{ key: "", value: "" }];
 }
+
+// addEnvKeys appends any of the given variable names not already present as a
+// row, each with an empty value to fill in. Unlike mergeEnv it never changes an
+// existing row, so values already typed or imported are preserved; it is for
+// seeding the keys discovered in a repo's .env.example. A pristine editor (its
+// lone empty row) is replaced by the discovered key rows.
+export function addEnvKeys(rows: EnvVar[], keys: string[]): EnvVar[] {
+  const present = new Set(rows.map((r) => r.key.trim()).filter(Boolean));
+  const additions = keys.filter((k) => !present.has(k)).map((k) => ({ key: k, value: "" }));
+  if (additions.length === 0) return rows;
+  const base = rows.filter((r) => r.key.trim() || r.value.trim());
+  return [...base, ...additions];
+}

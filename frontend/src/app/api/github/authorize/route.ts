@@ -4,7 +4,7 @@ import { GH_STATE_COOKIE } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-// Kicks off the GitHub App user-authorization flow. Token exchange + keychain
+// Kicks off the OAuth App authorization flow. Token exchange + keychain
 // storage are the Go backend's job; this handler only builds the authorize URL
 // and sets a CSRF state cookie. Without GITHUB_CLIENT_ID there is nothing real
 // to do, so we send the user back with a config error rather than faking a

@@ -15,7 +15,7 @@ export default async function ConnectPage({
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header crumbs={[{ label: "connect" }]} container="max-w-3xl" />
+      <Header crumbs={[]} container="max-w-3xl" />
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-12 sm:px-6 sm:py-20">
         <div className="rise">
@@ -26,7 +26,7 @@ export default async function ConnectPage({
             grant mountabo <span className="text-lime italic">just</span> what it needs.
           </h1>
           <p className="mt-6 max-w-xl text-[15px] leading-7 text-body">
-            mountabo connects as a GitHub App through GitHub&apos;s authorization flow. it
+            mountabo connects as an OAuth App through GitHub&apos;s authorization flow. it
             asks for the narrowest set of permissions that still let it add a deploy key,
             write one workflow file, and store the secrets that workflow reads. your token
             is exchanged on your machine and kept in your OS keychain: it never leaves.

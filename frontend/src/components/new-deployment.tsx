@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import {
@@ -15,6 +15,7 @@ import {
   Refresh,
   Search,
   Shield,
+  Trash,
 } from "@/components/icons";
 import { AddServerForm } from "@/components/add-server-form";
 import { OwnerDropdown } from "@/components/owner-dropdown";
@@ -23,6 +24,7 @@ import { ServerDomains, type DomainFormValue } from "@/components/server-domains
 import { ServerSelect } from "@/components/server-select";
 import { StreamLog } from "@/components/stream-log";
 import type { Source } from "@/lib/data";
+import { clearCachedRepos, fetchRepos, readCachedRepos, writeCachedRepos } from "@/lib/repo-cache";
 import type { Domain, ServerStatus, ServerView, SetupOption } from "@/lib/servers";
 
 const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
@@ -33,18 +35,22 @@ const statusTone: Record<ServerStatus, "blue" | "lime" | "gray" | "red"> = {
 };
 
 export function NewDeployment({
-  sources,
   servers,
   account,
   stamp,
 }: {
-  sources: Source[];
   servers: ServerView[];
   account: string | null;
   stamp: string;
 }) {
   const router = useRouter();
-  const [refreshing, startRefresh] = useTransition();
+  // Repositories load in the browser from a 12 hour localStorage cache (keyed by
+  // account), falling back to /api/repos on a miss. reposReady gates the empty
+  // state so the list shows "loading" instead of "no repositories" while fetching.
+  const [sources, setSources] = useState<Source[]>([]);
+  const [reposReady, setReposReady] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<string | null>(null);
@@ -114,6 +120,82 @@ export function NewDeployment({
         s.id === target.id ? { ...s, domains: (s.domains ?? []).filter((d) => d.host !== host) } : s,
       ),
     );
+  }
+
+  // Load repositories on mount: serve a fresh cache instantly, otherwise fetch
+  // and cache. Re-runs if the connected account changes (cache is per account).
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      if (!account) {
+        if (active) {
+          setSources([]);
+          setReposReady(true);
+        }
+        return;
+      }
+      const cached = readCachedRepos(account);
+      if (cached) {
+        if (active) {
+          setSources(cached.repos);
+          setReposReady(true);
+        }
+        return;
+      }
+      try {
+        const repos = await fetchRepos();
+        if (!active) return;
+        setSources(repos);
+        writeCachedRepos(account, repos);
+      } catch {
+        // a failed first load leaves an honest empty state, not fabricated repos
+      } finally {
+        if (active) setReposReady(true);
+      }
+    }
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [account]);
+
+  // The refresh button forces a fresh listing past the cache, for when the user
+  // has created a repository or been granted access to a new one. A failed
+  // refresh keeps the current list rather than blanking it.
+  async function refreshRepos() {
+    if (!account || refreshing) return;
+    setRefreshing(true);
+    try {
+      const repos = await fetchRepos();
+      setSources(repos);
+      writeCachedRepos(account, repos);
+    } catch {
+      // keep the current list
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  // The clear cache button purges the stored repository cache and reloads the
+  // list from GitHub, for when the cached listing is stale or wrong. Unlike
+  // refresh, it reloads from scratch (the list blanks to its loading state) so
+  // the cleared, refilled result is visibly fresh, then re-caches it.
+  async function clearCache() {
+    if (!account || clearing) return;
+    setClearing(true);
+    clearCachedRepos();
+    setReposReady(false);
+    setSources([]);
+    try {
+      const repos = await fetchRepos();
+      setSources(repos);
+      writeCachedRepos(account, repos);
+    } catch {
+      // leave the list empty; the next load will retry
+    } finally {
+      setReposReady(true);
+      setClearing(false);
+    }
   }
 
   // The hardening catalog (id/name/description) for the per-server toggles.
@@ -238,13 +320,22 @@ export function NewDeployment({
                 {String(filteredSources.length).padStart(2, "0")}
               </span>
             </span>
-            <button
-              onClick={() => startRefresh(() => router.refresh())}
-              disabled={refreshing}
-              className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream disabled:opacity-60"
-            >
-              <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
-            </button>
+            <span className="flex items-center gap-4">
+              <button
+                onClick={clearCache}
+                disabled={clearing || refreshing || !account}
+                className="flex items-center gap-1.5 text-[12px] text-muted transition-colors hover:text-cream disabled:opacity-60"
+              >
+                <Trash /> {clearing ? "clearing…" : "clear cache"}
+              </button>
+              <button
+                onClick={refreshRepos}
+                disabled={refreshing || clearing || !account}
+                className="flex items-center gap-1.5 text-[12px] text-lime transition-colors hover:text-cream disabled:opacity-60"
+              >
+                <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "refreshing…" : "refresh"}
+              </button>
+            </span>
           </div>
 
           <div className="flex items-center justify-between border-b border-line px-5 py-3 text-[13px]">
@@ -370,6 +461,8 @@ export function NewDeployment({
                       connect →
                     </Link>
                   </>
+                ) : !reposReady ? (
+                  <>loading repositories…</>
                 ) : q ? (
                   <>no sources match “{query}”.</>
                 ) : (

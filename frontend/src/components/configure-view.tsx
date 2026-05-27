@@ -10,7 +10,8 @@ import type { Server, Source } from "@/lib/data";
 import { type DetectedPort, fetchDetectedPorts, normalizeDir } from "@/lib/ports";
 import { fetchListeningPorts } from "@/lib/server-ports";
 import { type DeployPreview, type PreviewPort, type PreviewRequest, fetchPreview } from "@/lib/deploy-preview";
-import { type EnvVar, mergeEnv, parseEnvFile } from "@/lib/deploy-template";
+import { addEnvKeys, type EnvVar, mergeEnv, parseEnvFile } from "@/lib/deploy-template";
+import { fetchEnvExampleKeys } from "@/lib/env-example";
 
 type Tab = "workflow" | "script" | "secrets";
 
@@ -47,6 +48,11 @@ export function ConfigureView({
   const [showPaste, setShowPaste] = useState(false);
   const [paste, setPaste] = useState("");
   const [imported, setImported] = useState<number | null>(null);
+  // Env var values render masked by default (they are secrets); this toggle
+  // reveals them so the operator can check what they pasted before deploying.
+  const [showValues, setShowValues] = useState(false);
+  // Variable names found in the repo's .env.example, used to pre-fill the rows.
+  const [exampleKeys, setExampleKeys] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Ports already listening on the selected server. A host port in this set is
@@ -82,6 +88,27 @@ export function ConfigureView({
       });
     return () => ctrl.abort();
   }, [source.owner, source.name, branch, rootDir, portsKey]);
+
+  // Discover the repo's .env.example variable names whenever the repo, branch,
+  // or root directory changes. When the editor is still pristine (its lone empty
+  // row), auto-fill the discovered keys so the operator just fills the values,
+  // the way Vercel pre-populates from a project's example. We only auto-fill
+  // when pristine so switching branch never clobbers typed or imported vars; the
+  // "use repo .env.example" button below re-adds any missing keys on demand.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchEnvExampleKeys(source.owner, source.name, branch, normalizeDir(rootDir), ctrl.signal)
+      .then((keys) => {
+        setExampleKeys(keys);
+        if (keys.length === 0) return;
+        setEnvVars((rows) => {
+          const pristine = rows.length === 1 && !rows[0].key.trim() && !rows[0].value.trim();
+          return pristine ? addEnvKeys(rows, keys) : rows;
+        });
+      })
+      .catch(() => {}); // includes AbortError when the repo/branch changes
+    return () => ctrl.abort();
+  }, [source.owner, source.name, branch, rootDir]);
 
   // Load the ports already in use on the selected server so the form can flag a
   // host port that would collide. Keyed to the server id so a stale set reads
@@ -285,6 +312,20 @@ export function ConfigureView({
             >
               paste .env
             </button>
+            <button
+              onClick={() => setShowValues((v) => !v)}
+              className="rounded-md border border-line px-2.5 py-1.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+            >
+              {showValues ? "hide values" : "show values"}
+            </button>
+            {exampleKeys.length > 0 && (
+              <button
+                onClick={() => setEnvVars((rows) => addEnvKeys(rows, exampleKeys))}
+                className="rounded-md border border-lime/40 px-2.5 py-1.5 text-[12px] text-lime transition-colors hover:bg-lime/10"
+              >
+                use repo .env.example ({exampleKeys.length})
+              </button>
+            )}
             {imported !== null && (
               <span className="text-[12px] text-lime">imported {imported}</span>
             )}
@@ -353,7 +394,7 @@ export function ConfigureView({
                     value={row.value}
                     onChange={(e) => setEnv(i, { value: e.target.value })}
                     placeholder="value"
-                    type="password"
+                    type={showValues ? "text" : "password"}
                     className={`${inputCls} min-w-0 flex-1`}
                   />
                   <button
