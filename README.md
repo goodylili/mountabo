@@ -4,6 +4,17 @@ Mountabo helps you deploy your app to your own server.
 
 You run it locally, connect GitHub, add a VPS, and configure a repo once. After that, pushes to your chosen branch deploy through GitHub Actions straight to your server.
 
+## Examples
+
+Mountabo deploys any repository with a `Dockerfile` or a Docker Compose setup, whatever the stack. A few examples you can deploy from the picker:
+
+- [ibc-go](https://github.com/goodylili/ibc-go), Go
+- [pavex_tutorial_examples](https://github.com/goodylili/pavex_tutorial_examples), Rust
+- CosmosAccounts, Makefile (private)
+- derivator, Go (private)
+
+Pick one, choose a server, and deploy.
+
 ## What You Need
 
 - Go
