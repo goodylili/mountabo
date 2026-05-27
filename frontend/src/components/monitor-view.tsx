@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
+import { StreamLog } from "@/components/stream-log";
 import { ArrowRight, ChevronRight, Refresh } from "@/components/icons";
 import type { Deployment, DeployRun, RunStatus, Server } from "@/lib/data";
 import {
@@ -23,6 +24,17 @@ const runColor: Record<RunStatus, string> = {
 
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 
+// The self-hosted monitoring tools mountabo can install (hardening option ids),
+// with where each lives once set up. "set up monitoring" enables this whole
+// bundle on a server in one go.
+const MONITORING_TOOLS = [
+  { id: "netdata", label: "Netdata", access: "metrics dashboard · 127.0.0.1:19999 (ssh tunnel)" },
+  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor · 127.0.0.1:3001" },
+  { id: "ntfy", label: "ntfy", access: "push alerts · 127.0.0.1:8080" },
+  { id: "journald-persistent", label: "Persistent logs", access: "system logs kept across reboots" },
+];
+const MONITORING_IDS = MONITORING_TOOLS.map((t) => t.id);
+
 export function MonitorView({
   deployments,
   servers,
@@ -36,6 +48,8 @@ export function MonitorView({
   const [refreshing, startRefresh] = useTransition();
   const [open, setOpen] = useState<string>(deployments[0]?.app ?? "");
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
+  // Set while a monitoring-bundle install streams (the dedicated setup flow).
+  const [setupServer, setSetupServer] = useState<{ id: string; name: string; set: string[] } | null>(null);
   const serverById = new Map(servers.map((s) => [s.id, s]));
 
   const liveCount = deployments.filter((d) => d.status === "live").length;
@@ -101,6 +115,9 @@ export function MonitorView({
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;
           const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
+          const serverOptions = server?.options ?? [];
+          const missingTools = MONITORING_IDS.filter((id) => !serverOptions.includes(id));
+          const monitoringDesired = Array.from(new Set([...serverOptions, ...MONITORING_IDS]));
           return (
             <section key={d.app} className="rounded-xl border border-line bg-surface">
               <button
@@ -144,6 +161,38 @@ export function MonitorView({
                     </a>
                   </div>
 
+                  {/* monitoring tools on this server */}
+                  <div className="mt-4 border-t border-line pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="label">monitoring tools</span>
+                      {missingTools.length > 0 && (
+                        <button
+                          onClick={() => setSetupServer({ id: d.serverId, name: server?.name ?? d.serverId, set: monitoringDesired })}
+                          className="rounded-md border border-lime/40 px-2.5 py-1 text-[11px] text-lime transition-colors hover:bg-lime/10"
+                        >
+                          set up monitoring ({missingTools.length})
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {MONITORING_TOOLS.map((t) => {
+                        const on = serverOptions.includes(t.id);
+                        return (
+                          <span
+                            key={t.id}
+                            title={t.access}
+                            className={`rounded-md border px-2 py-1 text-[11px] ${
+                              on ? "border-lime/40 text-lime" : "border-line text-muted"
+                            }`}
+                          >
+                            {on ? "● " : "○ "}
+                            {t.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <ul className="mt-4 divide-y divide-line border-t border-line">
                     {d.runs.map((r) => (
                       <RunRow key={r.sha} run={r} />
@@ -155,6 +204,18 @@ export function MonitorView({
           );
         })}
       </div>
+
+      {setupServer && (
+        <StreamLog
+          title={`setting up monitoring on ${setupServer.name}`}
+          subtitle="netdata · uptime kuma · ntfy · persistent logs"
+          url={`/api/servers/${setupServer.id}/options?set=${encodeURIComponent(setupServer.set.join(","))}`}
+          onClose={() => setSetupServer(null)}
+          onDone={(ok) => {
+            if (ok) startRefresh(() => router.refresh()); // re-pull options so badges update
+          }}
+        />
+      )}
     </main>
   );
 }

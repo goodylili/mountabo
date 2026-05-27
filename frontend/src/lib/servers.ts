@@ -84,6 +84,7 @@ export function toDisplayServer(s: ServerView): import("@/lib/data").Server {
       ping: "n/a",
       sshPort: s.sshPort,
     },
+    options: s.options ?? [],
   };
 }
 
