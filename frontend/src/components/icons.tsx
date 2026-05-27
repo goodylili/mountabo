@@ -187,6 +187,53 @@ export function Moon({ className, ...props }: IconProps) {
   );
 }
 
+export function ExternalLink({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={14} height={14} className={className} {...base} {...props}>
+      <path d="M14 4h6v6" />
+      <path d="M20 4 11 13" />
+      <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
+export function Terminal({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={15} height={15} className={className} {...base} {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m7 9 3 3-3 3" />
+      <path d="M13 15h4" />
+    </svg>
+  );
+}
+
+export function CircleDot({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={16} height={16} className={className} {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function CircleCheck({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={16} height={16} className={className} {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12 2.5 2.5L16 9" />
+    </svg>
+  );
+}
+
+export function CircleX({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={16} height={16} className={className} {...base} {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m9 9 6 6M15 9l-6 6" />
+    </svg>
+  );
+}
+
 export function Branch({ className, ...props }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" width={13} height={13} className={className} {...base} {...props}>

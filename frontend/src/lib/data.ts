@@ -55,6 +55,9 @@ export type DeployRun = {
   status: RunStatus;
   when: string;
   duration: string;
+  // Direct GitHub links: the run on Actions and the commit. Open in a new tab.
+  runUrl: string;
+  commitUrl: string;
 };
 
 export type Deployment = {
@@ -63,7 +66,11 @@ export type Deployment = {
   serverId: string;
   branch: string;
   status: "live" | "idle" | "failing";
-  url: string;
+  // The running app's public address (what the operator actually visits).
+  liveUrl: string;
+  // The GitHub Actions workflow file/page that drives the deployment (secondary
+  // link, not where the app lives).
+  workflowUrl: string;
   uptimePct: string;
   lastDeploy: string;
   metrics: { cpu: string; mem: string; ping: string };

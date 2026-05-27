@@ -1,12 +1,25 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
 import { StreamLog } from "@/components/stream-log";
-import { ArrowRight, ChevronRight, Refresh } from "@/components/icons";
-import type { Deployment, DeployRun, RunStatus, Server } from "@/lib/data";
+import { ConfirmAction } from "@/components/confirm-action";
+import { ServerDomains, type DomainFormValue } from "@/components/server-domains";
+import {
+  ArrowRight,
+  ChevronRight,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  ExternalLink,
+  GithubMark,
+  Refresh,
+  Terminal,
+} from "@/components/icons";
+import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
+import type { Domain, ServerView, SetupOption } from "@/lib/servers";
 import {
   type ServerMetrics,
   fetchServerMetrics,
@@ -15,6 +28,15 @@ import {
   fmtMem,
   fmtUptime,
 } from "@/lib/server-metrics";
+import {
+  type GithubConclusion,
+  type GithubStatus,
+  type RunSteps,
+  fetchRunSteps,
+  runActive,
+} from "@/lib/run-steps";
+import { isLogHeader, logHeaderName, fetchServerLogs } from "@/lib/server-logs";
+import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -24,36 +46,77 @@ const runColor: Record<RunStatus, string> = {
 
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 
+// How often to re-poll the GitHub run walkthrough while a run is in progress.
+const STEP_POLL_MS = 4000;
+
 // The self-hosted monitoring tools mountabo can install (hardening option ids),
-// with where each lives once set up. "set up monitoring" enables this whole
-// bundle on a server in one go.
+// with where each lives once set up. The operator now picks any subset to
+// enable, rather than the whole bundle.
 const MONITORING_TOOLS = [
-  { id: "netdata", label: "Netdata", access: "metrics dashboard · 127.0.0.1:19999 (ssh tunnel)" },
-  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor · 127.0.0.1:3001" },
-  { id: "ntfy", label: "ntfy", access: "push alerts · 127.0.0.1:8080" },
+  { id: "netdata", label: "Netdata", access: "metrics dashboard, 127.0.0.1:19999 over an ssh tunnel" },
+  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor, 127.0.0.1:3001" },
+  { id: "ntfy", label: "ntfy", access: "push alerts, 127.0.0.1:8080" },
   { id: "journald-persistent", label: "Persistent logs", access: "system logs kept across reboots" },
 ];
-const MONITORING_IDS = MONITORING_TOOLS.map((t) => t.id);
 
 export function MonitorView({
   deployments,
   servers,
+  catalog,
   stamp,
 }: {
   deployments: Deployment[];
-  servers: Server[];
+  servers: ServerView[];
+  catalog: SetupOption[];
   stamp: string;
 }) {
   const router = useRouter();
   const [refreshing, startRefresh] = useTransition();
   const [open, setOpen] = useState<string>(deployments[0]?.app ?? "");
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
-  // Set while a monitoring-bundle install streams (the dedicated setup flow).
-  const [setupServer, setSetupServer] = useState<{ id: string; name: string; set: string[] } | null>(null);
-  const serverById = new Map(servers.map((s) => [s.id, s]));
+  const [serverList, setServerList] = useState<ServerView[]>(servers);
+  const serverById = new Map(serverList.map((s) => [s.id, s]));
+
+  const optionName = useCallback(
+    (id: string) => catalog.find((o) => o.id === id)?.name ?? id,
+    [catalog],
+  );
+
+  // The monitoring-tools panel: which tools the operator has ticked for the open
+  // server (keyed by server id so each card keeps its own selection).
+  const [monitoringPick, setMonitoringPick] = useState<Record<string, string[]>>({});
+
+  // Live streams (apply monitoring / add domain / remove domain) for the open
+  // card. Each only opens after its ConfirmAction gate is confirmed.
+  const [monitorTarget, setMonitorTarget] = useState<{
+    server: ServerView;
+    desired: string[];
+    adding: string[];
+  } | null>(null);
+  const [domainTarget, setDomainTarget] = useState<
+    | { server: ServerView; mode: "add"; value: DomainFormValue }
+    | { server: ServerView; mode: "remove"; host: string }
+    | null
+  >(null);
+
+  // Confirmation gates. Nothing touches a server until one is confirmed.
+  const [confirmMonitor, setConfirmMonitor] = useState<{
+    server: ServerView;
+    desired: string[];
+    adding: string[];
+  } | null>(null);
+  const [confirmDomain, setConfirmDomain] = useState<
+    | { server: ServerView; mode: "add"; value: DomainFormValue }
+    | { server: ServerView; mode: "remove"; host: string }
+    | null
+  >(null);
+  // The add-domain preview (nginx config + script) for the open gate.
+  const [domainPreview, setDomainPreview] = useState<DomainPreview | null>(null);
+  const [domainPreviewLoading, setDomainPreviewLoading] = useState(false);
 
   const liveCount = deployments.filter((d) => d.status === "live").length;
-  const openServerId = deployments.find((d) => d.app === open)?.serverId ?? "";
+  const openDeployment = deployments.find((d) => d.app === open);
+  const openServerId = openDeployment?.serverId ?? "";
 
   // Read the open deployment's server metrics on demand (no daemon), keyed by
   // server id so each is fetched once until a refresh clears the cache.
@@ -66,18 +129,71 @@ export function MonitorView({
     return () => ctrl.abort();
   }, [openServerId, metrics]);
 
+  // When the add-domain gate opens, fetch the exact nginx config + script the
+  // backend would write, so the operator sees precisely what runs before it does.
+  useEffect(() => {
+    if (!confirmDomain || confirmDomain.mode !== "add") {
+      setDomainPreview(null);
+      setDomainPreviewLoading(false);
+      return;
+    }
+    const ctrl = new AbortController();
+    setDomainPreview(null);
+    setDomainPreviewLoading(true);
+    fetchDomainPreview(confirmDomain.value, ctrl.signal)
+      .then((res) => {
+        if (ctrl.signal.aborted) return;
+        if (!("error" in res)) setDomainPreview(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!ctrl.signal.aborted) setDomainPreviewLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [confirmDomain]);
+
   function refresh() {
     setMetrics({}); // drop cached metrics so the open server re-reads
     startRefresh(() => router.refresh()); // re-pull deployments + their runs
   }
 
+  // After a successful apply/domain change, reflect it locally so the panels
+  // stay current without a refetch, then refresh to re-pull authoritative state.
+  function recordMonitoring(serverId: string, desired: string[]) {
+    setServerList((list) =>
+      list.map((s) => (s.id === serverId ? { ...s, options: desired } : s)),
+    );
+    setMonitoringPick((p) => ({ ...p, [serverId]: [] }));
+  }
+  function recordDomainAdd(serverId: string, value: DomainFormValue) {
+    const entry: Domain = {
+      host: value.host,
+      aliases: value.aliases,
+      upstream: value.upstream,
+      email: value.email || undefined,
+      createdAt: new Date().toISOString(),
+    };
+    setServerList((list) =>
+      list.map((s) =>
+        s.id === serverId
+          ? { ...s, domains: [...(s.domains ?? []).filter((d) => d.host !== entry.host), entry] }
+          : s,
+      ),
+    );
+  }
+  function recordDomainRemove(serverId: string, host: string) {
+    setServerList((list) =>
+      list.map((s) =>
+        s.id === serverId ? { ...s, domains: (s.domains ?? []).filter((d) => d.host !== host) } : s,
+      ),
+    );
+  }
+
   return (
-    <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
+    <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-16 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       <div className="rise flex items-start justify-between gap-4 sm:gap-6">
         <div>
-          <p className="label">
-            live status · {stamp}
-          </p>
+          <p className="label">live status · {stamp}</p>
           <h1 className="mt-6 text-4xl font-extrabold leading-[1.02] tracking-tight text-cream sm:text-5xl sm:leading-[0.98] lg:text-6xl">
             everything you ship,
             <br />
@@ -97,17 +213,24 @@ export function MonitorView({
         </button>
       </div>
 
-      <div className="rise mt-8 flex items-center gap-4 border-y border-line py-4 text-[13px] sm:gap-6" style={{ animationDelay: "70ms" }}>
+      <div
+        className="rise mt-10 flex items-center gap-6 border-y border-line py-6 text-[13px] sm:gap-10"
+        style={{ animationDelay: "70ms" }}
+      >
         <Summary value={String(deployments.length)} label="apps" />
-        <span className="h-8 w-px bg-line" />
+        <span className="h-10 w-px bg-line" />
         <Summary value={String(liveCount)} label="live" tone="blue" />
-        <span className="h-8 w-px bg-line" />
-        <Summary value={String(deployments.length - liveCount)} label="needs attention" tone={deployments.length - liveCount > 0 ? "red" : "muted"} />
+        <span className="h-10 w-px bg-line" />
+        <Summary
+          value={String(deployments.length - liveCount)}
+          label="needs attention"
+          tone={deployments.length - liveCount > 0 ? "red" : "muted"}
+        />
       </div>
 
-      <div className="rise mt-6 flex flex-col gap-3" style={{ animationDelay: "120ms" }}>
+      <div className="rise mt-8 flex flex-col gap-5" style={{ animationDelay: "120ms" }}>
         {deployments.length === 0 && (
-          <p className="rounded-xl border border-dashed border-line px-5 py-12 text-center text-[13px] text-muted">
+          <p className="rounded-2xl border border-dashed border-line px-6 py-16 text-center text-[14px] text-muted">
             nothing deployed yet. connect a repository to a server and your live status shows up here.
           </p>
         )}
@@ -115,151 +238,742 @@ export function MonitorView({
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;
           const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
-          const serverOptions = server?.options ?? [];
-          const missingTools = MONITORING_IDS.filter((id) => !serverOptions.includes(id));
-          const monitoringDesired = Array.from(new Set([...serverOptions, ...MONITORING_IDS]));
+          const latest = d.runs[0];
+          const picked = monitoringPick[d.serverId] ?? [];
           return (
-            <section key={d.app} className="rounded-xl border border-line bg-surface">
+            <section key={d.app} className="overflow-hidden rounded-2xl border border-line bg-surface">
               <button
                 onClick={() => setOpen(isOpen ? "" : d.app)}
-                className="flex w-full items-center gap-4 px-5 py-4 text-left"
+                className="flex w-full items-center gap-4 px-6 py-5 text-left"
+                aria-expanded={isOpen}
               >
                 <ChevronRight className={`text-muted transition-transform ${isOpen ? "rotate-90" : ""}`} />
                 {server && <ServerAvatar seed={server.name} />}
                 <div className="min-w-0 flex-1">
-                  <span className="flex items-center gap-2.5">
-                    <span className="text-[15px] font-medium text-cream">{d.app}</span>
+                  <span className="flex items-center gap-3">
+                    <span className="text-[18px] font-semibold text-cream">{d.app}</span>
                     <Badge tone={statusTone[d.status]} dot>
                       {d.status}
                     </Badge>
+                    {latest && <LatestRunPill status={latest.status} />}
                   </span>
-                  <span className="mt-1 block truncate text-[12px] text-muted">
+                  <span className="mt-1.5 block truncate text-[13px] text-muted">
                     {d.repo} · {d.branch} · {server?.name ?? d.serverId}
                   </span>
                 </div>
                 <RunStrip runs={d.runs} />
                 <div className="hidden text-right sm:block">
-                  <span className="block text-[15px] font-medium text-cream">{d.deploys ?? 0} deploys</span>
-                  <span className="block text-[11px] text-muted">last {d.lastDeploy}</span>
+                  <span className="block text-[18px] font-semibold text-cream">{d.deploys ?? 0}</span>
+                  <span className="block text-[11px] text-muted">deploys · last {d.lastDeploy}</span>
                 </div>
               </button>
 
               {isOpen && (
-                <div className="border-t border-line px-5 py-4">
-                  <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[12.5px]">
-                    <Metric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
-                    <Metric label="mem" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
-                    <Metric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
-                    <Metric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
-                    <a
-                      href={d.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto flex items-center gap-1.5 text-lime transition-colors hover:text-cream"
-                    >
-                      open {d.url.replace("https://", "")} <ArrowRight />
-                    </a>
-                  </div>
-
-                  {/* monitoring tools on this server */}
-                  <div className="mt-4 border-t border-line pt-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="label">monitoring tools</span>
-                      {missingTools.length > 0 && (
-                        <button
-                          onClick={() => setSetupServer({ id: d.serverId, name: server?.name ?? d.serverId, set: monitoringDesired })}
-                          className="rounded-md border border-lime/40 px-2.5 py-1 text-[11px] text-lime transition-colors hover:bg-lime/10"
-                        >
-                          set up monitoring ({missingTools.length})
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {MONITORING_TOOLS.map((t) => {
-                        const on = serverOptions.includes(t.id);
-                        return (
-                          <span
-                            key={t.id}
-                            title={t.access}
-                            className={`rounded-md border px-2 py-1 text-[11px] ${
-                              on ? "border-lime/40 text-lime" : "border-line text-muted"
-                            }`}
-                          >
-                            {on ? "● " : "○ "}
-                            {t.label}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <ul className="mt-4 divide-y divide-line border-t border-line">
-                    {d.runs.map((r) => (
-                      <RunRow key={r.sha} run={r} />
-                    ))}
-                  </ul>
-
-                  {(d.timeline?.length ?? 0) > 0 && (
-                    <div className="mt-4 border-t border-line pt-4">
-                      <span className="label">deploy timeline · {d.deploys ?? 0} total</span>
-                      <ul className="mt-2 space-y-1.5 text-[12px]">
-                        {d.timeline!.map((e, i) => (
-                          <li key={i} className="flex items-center gap-3">
-                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                            <span className="text-body">configured for {e.environment}</span>
-                            <span className="ml-auto text-muted">{e.when}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
+                <ExpandedCard
+                  deployment={d}
+                  server={server}
+                  metrics={m}
+                  picked={picked}
+                  onPick={(ids) => setMonitoringPick((p) => ({ ...p, [d.serverId]: ids }))}
+                  onApplyMonitoring={(server, desired, adding) =>
+                    setConfirmMonitor({ server, desired, adding })
+                  }
+                  onAddDomain={(server, value) =>
+                    setConfirmDomain({ server, mode: "add", value })
+                  }
+                  onRemoveDomain={(server, host) =>
+                    setConfirmDomain({ server, mode: "remove", host })
+                  }
+                  optionName={optionName}
+                />
               )}
             </section>
           );
         })}
       </div>
 
-      {setupServer && (
+      {/* Live streams: each opens only after its gate is confirmed. */}
+      {monitorTarget && (
         <StreamLog
-          title={`setting up monitoring on ${setupServer.name}`}
-          subtitle="netdata · uptime kuma · ntfy · persistent logs"
-          url={`/api/servers/${setupServer.id}/options?set=${encodeURIComponent(setupServer.set.join(","))}`}
-          onClose={() => setSetupServer(null)}
+          title={`installing monitoring on ${monitorTarget.server.name}`}
+          subtitle={monitorTarget.adding.map(optionName).join(", ")}
+          timezone={monitorTarget.server.timezone}
+          url={`/api/servers/${monitorTarget.server.id}/options?set=${encodeURIComponent(
+            monitorTarget.desired.join(","),
+          )}`}
           onDone={(ok) => {
-            if (ok) startRefresh(() => router.refresh()); // re-pull options so badges update
+            if (ok) {
+              recordMonitoring(monitorTarget.server.id, monitorTarget.desired);
+              startRefresh(() => router.refresh());
+            }
           }}
+          onClose={() => setMonitorTarget(null)}
+        />
+      )}
+      {domainTarget && (
+        <StreamLog
+          title={
+            domainTarget.mode === "add"
+              ? `adding ${domainTarget.value.host}`
+              : `removing ${domainTarget.host}`
+          }
+          subtitle={domainTarget.server.ip}
+          timezone={domainTarget.server.timezone}
+          url={
+            domainTarget.mode === "add"
+              ? addDomainUrl(domainTarget.server.id, domainTarget.value)
+              : removeDomainUrl(domainTarget.server.id, domainTarget.host)
+          }
+          onDone={(ok) => {
+            if (!ok) return;
+            if (domainTarget.mode === "add")
+              recordDomainAdd(domainTarget.server.id, domainTarget.value);
+            else recordDomainRemove(domainTarget.server.id, domainTarget.host);
+            startRefresh(() => router.refresh());
+          }}
+          onClose={() => setDomainTarget(null)}
+        />
+      )}
+
+      {/* Confirmation gates. */}
+      {confirmMonitor && (
+        <ConfirmAction
+          title={`install monitoring on ${confirmMonitor.server.name}`}
+          subtitle={confirmMonitor.server.ip}
+          summary={
+            <>
+              mountabo will connect to <span className="text-cream">{confirmMonitor.server.name}</span> as
+              the mountabo user (with sudo) and install{" "}
+              <span className="text-lime">
+                {confirmMonitor.adding.map(optionName).join(", ")}
+              </span>
+              . your existing hardening stays untouched. nothing runs until you confirm.
+            </>
+          }
+          steps={[
+            "connect to the server as the mountabo user over SSH (with sudo)",
+            ...confirmMonitor.adding.map((id) => `install and enable: ${optionName(id)}`),
+            "leave every other applied option exactly as it is",
+          ]}
+          confirmLabel="install monitoring"
+          onConfirm={() => {
+            setMonitorTarget(confirmMonitor);
+            setConfirmMonitor(null);
+          }}
+          onCancel={() => setConfirmMonitor(null)}
+        />
+      )}
+
+      {confirmDomain && confirmDomain.mode === "add" && (
+        <ConfirmAction
+          title={`add ${confirmDomain.value.host}`}
+          subtitle={confirmDomain.server.ip}
+          summary={
+            <>
+              mountabo will configure <span className="text-cream">{confirmDomain.server.name}</span> to
+              front <span className="text-cream">{confirmDomain.value.host}</span> on https, proxying to
+              your app on port <span className="text-cream">{confirmDomain.value.upstream}</span>. it
+              installs nginx if needed, writes the vhost below, and obtains a Let&apos;s Encrypt
+              certificate over http, so the domain must already point at{" "}
+              <span className="text-cream">{confirmDomain.server.ip}</span>. nothing runs until you
+              confirm.
+            </>
+          }
+          loading={domainPreviewLoading}
+          steps={
+            domainPreview
+              ? `# ${domainPreview.sitePath} (http)\n${domainPreview.httpConfig}\n\n# ${domainPreview.sitePath} (https)\n${domainPreview.tlsConfig}\n\n# setup script\n${domainPreview.script}`
+              : domainPreviewLoading
+                ? undefined
+                : [
+                    "connect to the server as the mountabo user over SSH (with sudo)",
+                    "install nginx if it is not already present",
+                    `write the nginx vhost for ${confirmDomain.value.host}`,
+                    "obtain a Let's Encrypt certificate over http and enable https",
+                    "reload nginx so the domain serves over https",
+                  ]
+          }
+          confirmLabel={`add ${confirmDomain.value.host}`}
+          onConfirm={() => {
+            setDomainTarget(confirmDomain);
+            setConfirmDomain(null);
+          }}
+          onCancel={() => setConfirmDomain(null)}
+        />
+      )}
+
+      {confirmDomain && confirmDomain.mode === "remove" && (
+        <ConfirmAction
+          title={`remove ${confirmDomain.host}`}
+          subtitle={confirmDomain.server.ip}
+          destructive
+          summary={
+            <>
+              mountabo will stop fronting <span className="text-cream">{confirmDomain.host}</span> on{" "}
+              <span className="text-cream">{confirmDomain.server.name}</span>: it removes the nginx vhost
+              and its certificate, then reloads nginx. your app keeps running on its local port. nothing
+              runs until you confirm.
+            </>
+          }
+          steps={[
+            "connect to the server as the mountabo user over SSH (with sudo)",
+            `remove the nginx vhost for ${confirmDomain.host}`,
+            "delete the Let's Encrypt certificate for the domain",
+            "reload nginx so it stops serving the domain",
+          ]}
+          confirmLabel="remove domain"
+          onConfirm={() => {
+            setDomainTarget(confirmDomain);
+            setConfirmDomain(null);
+          }}
+          onCancel={() => setConfirmDomain(null)}
         />
       )}
     </main>
   );
 }
 
-function Summary({ value, label, tone = "cream" }: { value: string; label: string; tone?: "cream" | "blue" | "red" | "muted" }) {
-  const color = tone === "blue" ? "text-blue" : tone === "red" ? "text-red-400" : tone === "muted" ? "text-muted" : "text-cream";
+// ExpandedCard is the open deployment's full body: deploy status + live link,
+// host metrics, the live GitHub run walkthrough, the runs list, a logs viewer,
+// per-tool monitoring, custom domains, and the deploy timeline.
+function ExpandedCard({
+  deployment: d,
+  server,
+  metrics: m,
+  picked,
+  onPick,
+  onApplyMonitoring,
+  onAddDomain,
+  onRemoveDomain,
+  optionName,
+}: {
+  deployment: Deployment;
+  server?: ServerView;
+  metrics: ServerMetrics | null | undefined;
+  picked: string[];
+  onPick: (ids: string[]) => void;
+  onApplyMonitoring: (server: ServerView, desired: string[], adding: string[]) => void;
+  onAddDomain: (server: ServerView, value: DomainFormValue) => void;
+  onRemoveDomain: (server: ServerView, host: string) => void;
+  optionName: (id: string) => string;
+}) {
+  const latest = d.runs[0];
+  const [owner, repo] = splitRepo(d.repo);
+  const live = d.liveUrl ? d.liveUrl.replace(/^https?:\/\//, "") : "";
+
   return (
-    <span className="flex items-baseline gap-2">
-      <span className={`text-2xl font-bold ${color}`}>{value}</span>
-      <span className="text-[12px] text-muted">{label}</span>
+    <div className="space-y-10 border-t border-line px-6 py-8 sm:px-8">
+      {/* deploy status + live link */}
+      <section>
+        <SectionHeader>deployment</SectionHeader>
+        <div className="mt-4 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-4">
+            <DeployStatusBadge status={latest?.status} />
+            <div>
+              <p className="text-[15px] text-cream">
+                {latest
+                  ? latest.status === "success"
+                    ? "latest deployment succeeded"
+                    : latest.status === "failed"
+                      ? "latest deployment failed"
+                      : "deployment is running"
+                  : "no deployment runs yet"}
+              </p>
+              <p className="mt-0.5 text-[12.5px] text-muted">
+                {latest ? `${latest.message} · ${latest.when}` : "trigger a deploy to see status here"}
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            {d.liveUrl && (
+              <a
+                href={d.liveUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cta-glow flex items-center gap-2 rounded-lg bg-lime-fill px-4 py-2.5 text-[13px] font-bold text-black transition-transform hover:-translate-y-0.5"
+              >
+                open {live} <ArrowRight />
+              </a>
+            )}
+            {d.workflowUrl && (
+              <a
+                href={d.workflowUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded-lg border border-line px-4 py-2.5 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+              >
+                <GithubMark /> actions workflow <ExternalLink />
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* host metrics */}
+        <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
+          <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
+          <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
+          <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
+          <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
+        </div>
+      </section>
+
+      {/* step-by-step deploy walkthrough from GitHub Actions */}
+      <section>
+        <SectionHeader>deploy walkthrough</SectionHeader>
+        <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
+      </section>
+
+      {/* runs list with clickable GitHub links */}
+      <section>
+        <SectionHeader>recent runs</SectionHeader>
+        {d.runs.length === 0 ? (
+          <p className="mt-4 text-[13px] text-muted">no runs recorded yet.</p>
+        ) : (
+          <ul className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line">
+            {d.runs.map((r) => (
+              <RunRow key={r.sha} run={r} />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* logs viewer */}
+      <section>
+        <SectionHeader>container logs</SectionHeader>
+        <LogsViewer serverId={d.serverId} ready={Boolean(server)} />
+      </section>
+
+      {/* per-tool monitoring */}
+      <section>
+        <SectionHeader>monitoring tools</SectionHeader>
+        <MonitoringPanel
+          server={server}
+          picked={picked}
+          onPick={onPick}
+          onApply={onApplyMonitoring}
+          optionName={optionName}
+        />
+      </section>
+
+      {/* custom domains */}
+      {server && (
+        <section>
+          <SectionHeader>custom domains</SectionHeader>
+          <div className="mt-4 overflow-hidden rounded-xl border border-line bg-surface">
+            <ServerDomains
+              key={`dom:${(server.domains ?? []).map((dm) => dm.host).join(",")}`}
+              server={server}
+              onAdd={(value) => onAddDomain(server, value)}
+              onRemove={(host) => onRemoveDomain(server, host)}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* deploy timeline */}
+      {(d.timeline?.length ?? 0) > 0 && (
+        <section>
+          <SectionHeader>deploy timeline · {d.deploys ?? 0} total</SectionHeader>
+          <ul className="mt-4 space-y-2.5 text-[13px]">
+            {(d.timeline ?? []).map((e, i) => (
+              <li key={i} className="flex items-center gap-3">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
+                <span className="text-body">configured for {e.environment}</span>
+                <span className="ml-auto text-muted">{e.when}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+// RunWalkthrough fetches the open deployment's latest GitHub Actions run and
+// renders its jobs and steps with live status, polling while the run is in
+// progress and stopping once it completes.
+function RunWalkthrough({
+  owner,
+  repo,
+  branch,
+  latestStatus,
+}: {
+  owner: string;
+  repo: string;
+  branch: string;
+  latestStatus?: RunStatus;
+}) {
+  const [steps, setSteps] = useState<RunSteps | null>(null);
+  // null = not read yet; the effect resolves it on mount and on each poll.
+  const enabled = Boolean(owner && repo && branch);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function tick() {
+      const ctrl = new AbortController();
+      const res = await fetchRunSteps(owner, repo, branch, ctrl.signal);
+      if (cancelled) return;
+      setSteps(res);
+      // Keep polling only while the run is still going; stop once it completes.
+      if (runActive(res)) timer = setTimeout(tick, STEP_POLL_MS);
+    }
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // latestStatus is included so a refresh that flips the run back to running
+    // (a new deploy) restarts polling.
+  }, [enabled, owner, repo, branch, latestStatus]);
+
+  if (enabled && steps === null) {
+    return <p className="mt-4 text-[13px] text-muted">reading the latest workflow run…</p>;
+  }
+  if (!steps || (!steps.runUrl && steps.jobs.length === 0)) {
+    return (
+      <p className="mt-4 rounded-xl border border-dashed border-line px-5 py-8 text-center text-[13px] text-muted">
+        no workflow run found for {branch} yet. push to {branch} or trigger the deploy workflow and the
+        steps show up here.
+      </p>
+    );
+  }
+
+  const active = runActive(steps);
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex items-center gap-3 text-[12.5px]">
+        <span className={`flex items-center gap-2 ${active ? "text-lime" : "text-muted"}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${active ? "animate-pulse bg-lime" : "bg-muted"}`} />
+          {active ? "run in progress, refreshing every few seconds" : "run finished"}
+        </span>
+        {steps.runUrl && (
+          <a
+            href={steps.runUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto flex items-center gap-1.5 text-muted transition-colors hover:text-cream"
+          >
+            <GithubMark /> view on github <ExternalLink />
+          </a>
+        )}
+      </div>
+
+      {steps.jobs.length === 0 ? (
+        <p className="text-[13px] text-muted">the run has no jobs reported yet.</p>
+      ) : (
+        <div className="space-y-4">
+          {steps.jobs.map((job, ji) => (
+            <div key={ji} className="overflow-hidden rounded-xl border border-line bg-surface">
+              <div className="flex items-center gap-3 border-b border-line px-5 py-3.5">
+                <StepIcon status={job.status} conclusion={job.conclusion} />
+                <span className="flex-1 text-[14px] font-medium text-cream">{job.name}</span>
+                <StepStatusLabel status={job.status} conclusion={job.conclusion} />
+                {job.htmlUrl && (
+                  <a
+                    href={job.htmlUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-muted transition-colors hover:text-cream"
+                    aria-label={`open job ${job.name} on github`}
+                  >
+                    <ExternalLink />
+                  </a>
+                )}
+              </div>
+              <ol className="divide-y divide-line">
+                {job.steps.map((s, si) => (
+                  <li key={si} className="flex items-center gap-3 px-5 py-2.5 text-[13px]">
+                    <StepIcon status={s.status} conclusion={s.conclusion} />
+                    <span className="flex-1 text-body">{s.name}</span>
+                    <StepStatusLabel status={s.status} conclusion={s.conclusion} />
+                  </li>
+                ))}
+                {job.steps.length === 0 && (
+                  <li className="px-5 py-2.5 text-[12.5px] text-muted">no steps reported yet</li>
+                )}
+              </ol>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// LogsViewer fetches and shows the open server's running container logs in a
+// dark, scrollable terminal panel, with a refresh control and an empty state.
+function LogsViewer({ serverId, ready }: { serverId: string; ready: boolean }) {
+  // null = not read yet (shows "reading…"); [] = read, but no logs.
+  const [lines, setLines] = useState<string[] | null>(null);
+  // Tracks an in-flight refresh triggered from the button (an event handler).
+  const [refreshing, setRefreshing] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Read once when the card opens. setState only happens once the fetch
+  // resolves, so the effect never sets state synchronously.
+  useEffect(() => {
+    if (!serverId) return;
+    const ctrl = new AbortController();
+    fetchServerLogs(serverId, 200, ctrl.signal).then((res) => {
+      if (!ctrl.signal.aborted) setLines(res?.lines ?? []);
+    });
+    return () => ctrl.abort();
+  }, [serverId]);
+
+  // Manual refresh from the button (an event handler, not an effect).
+  async function refresh() {
+    if (!serverId || refreshing) return;
+    setRefreshing(true);
+    const res = await fetchServerLogs(serverId, 200);
+    setLines(res?.lines ?? []);
+    setRefreshing(false);
+  }
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [lines]);
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-xl border border-line bg-black/40">
+      <div className="flex items-center justify-between border-b border-line px-5 py-3">
+        <span className="flex items-center gap-2 text-[12.5px] text-muted">
+          <Terminal className="text-faint" /> running containers · last 200 lines
+        </span>
+        <button
+          onClick={() => void refresh()}
+          disabled={refreshing || !ready}
+          className="flex items-center gap-1.5 rounded-md border border-line px-2.5 py-1 text-[12px] text-lime transition-colors hover:bg-lime/10 disabled:opacity-50"
+        >
+          <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "reading…" : "refresh"}
+        </button>
+      </div>
+      <div
+        ref={scrollRef}
+        className="h-72 overflow-y-auto overscroll-contain px-5 py-4 font-mono text-[12px] leading-6"
+      >
+        {!ready ? (
+          <p className="text-muted">this server is not set up yet, so it has no container logs.</p>
+        ) : lines === null ? (
+          <p className="text-muted">reading container logs…</p>
+        ) : lines.length === 0 ? (
+          <p className="text-muted">no logs yet. once a container is running its output shows here.</p>
+        ) : (
+          lines.map((line, i) =>
+            isLogHeader(line) ? (
+              <p key={i} className="mt-3 first:mt-0 text-[11px] font-semibold uppercase tracking-wide text-lime">
+                {logHeaderName(line)}
+              </p>
+            ) : (
+              <p key={i} className="whitespace-pre-wrap break-words text-body">
+                {line}
+              </p>
+            ),
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
+// MonitoringPanel lets the operator pick which monitoring tools to enable, then
+// applies only the chosen subset, preserving every other (non-monitoring) option
+// already on the server so installing monitoring never removes hardening.
+function MonitoringPanel({
+  server,
+  picked,
+  onPick,
+  onApply,
+  optionName,
+}: {
+  server?: ServerView;
+  picked: string[];
+  onPick: (ids: string[]) => void;
+  onApply: (server: ServerView, desired: string[], adding: string[]) => void;
+  optionName: (id: string) => string;
+}) {
+  if (!server) {
+    return (
+      <p className="mt-4 text-[13px] text-muted">
+        this server is not set up yet, so monitoring tools cannot be installed.
+      </p>
+    );
+  }
+  const current = new Set(server.options ?? []);
+  // Only tools not already installed are selectable.
+  const available = MONITORING_TOOLS.filter((t) => !current.has(t.id));
+  const toggle = (id: string) =>
+    onPick(picked.includes(id) ? picked.filter((p) => p !== id) : [...picked, id]);
+
+  // Preserve every non-monitoring option (hardening) and every monitoring tool
+  // already on, then add the picked subset.
+  const adding = picked.filter((id) => !current.has(id));
+  const desired = Array.from(new Set([...(server.options ?? []), ...adding]));
+
+  return (
+    <div className="mt-4 space-y-4">
+      <p className="text-[13px] leading-6 text-body">
+        pick which monitoring tools to install on{" "}
+        <span className="text-cream">{server.name}</span>. only the tools you check are added, and your
+        existing hardening stays exactly as it is.
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {MONITORING_TOOLS.map((t) => {
+          const installed = current.has(t.id);
+          const checked = installed || picked.includes(t.id);
+          return (
+            <label
+              key={t.id}
+              className={`flex cursor-pointer items-start gap-3 rounded-xl border bg-surface p-4 transition-colors ${
+                installed
+                  ? "border-lime/40"
+                  : picked.includes(t.id)
+                    ? "border-lime/50 bg-lime/[0.05]"
+                    : "border-line hover:border-line-strong"
+              } ${installed ? "cursor-default" : ""}`}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={installed}
+                onChange={() => toggle(t.id)}
+                className="mt-0.5 h-4 w-4 accent-lime"
+              />
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-[14px] font-medium text-cream">
+                  {t.label}
+                  {installed && <span className="text-[12px] text-blue">installed</span>}
+                </span>
+                <span className="mt-1 block text-[12.5px] leading-6 text-muted">{t.access}</span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <button
+        onClick={() => onApply(server, desired, adding)}
+        disabled={adding.length === 0}
+        className="flex w-full items-center justify-center gap-2 rounded-lg border border-lime/50 bg-lime/[0.06] px-4 py-2.5 text-[12.5px] font-medium text-lime transition-colors hover:bg-lime/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {available.length === 0
+          ? "all monitoring tools installed"
+          : adding.length === 0
+            ? "pick the tools to install"
+            : `install ${adding.map(optionName).join(", ")}`}
+      </button>
+    </div>
+  );
+}
+
+// Builds the add-domain SSE URL: ?host=&upstream=&aliases=&email=&staging=.
+function addDomainUrl(serverId: string, v: DomainFormValue): string {
+  const qs = new URLSearchParams();
+  qs.set("host", v.host);
+  if (v.upstream) qs.set("upstream", v.upstream);
+  if (v.aliases.length) qs.set("aliases", v.aliases.join(","));
+  if (v.email) qs.set("email", v.email);
+  if (v.staging) qs.set("staging", "1");
+  return `/api/servers/${serverId}/domains/add?${qs.toString()}`;
+}
+
+function removeDomainUrl(serverId: string, host: string): string {
+  return `/api/servers/${serverId}/domains/remove?host=${encodeURIComponent(host)}`;
+}
+
+// Splits an "owner/repo" string into its parts for the run-steps fetch.
+function splitRepo(full: string): [string, string] {
+  const slash = full.indexOf("/");
+  if (slash < 0) return ["", full];
+  return [full.slice(0, slash), full.slice(slash + 1)];
+}
+
+function Summary({
+  value,
+  label,
+  tone = "cream",
+}: {
+  value: string;
+  label: string;
+  tone?: "cream" | "blue" | "red" | "muted";
+}) {
+  const color =
+    tone === "blue"
+      ? "text-blue"
+      : tone === "red"
+        ? "text-red-400"
+        : tone === "muted"
+          ? "text-muted"
+          : "text-cream";
+  return (
+    <span className="flex items-baseline gap-2.5">
+      <span className={`text-4xl font-bold ${color}`}>{value}</span>
+      <span className="text-[13px] text-muted">{label}</span>
     </span>
   );
+}
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">{children}</h2>;
 }
 
 function RunStrip({ runs }: { runs: DeployRun[] }) {
   return (
     <span className="hidden items-center gap-1 md:flex" title="recent deploys">
       {runs.map((r) => (
-        <span key={r.sha} className={`h-4 w-1.5 rounded-sm ${runColor[r.status]} ${r.status === "running" ? "animate-pulse" : ""}`} />
+        <span
+          key={r.sha}
+          className={`h-5 w-1.5 rounded-sm ${runColor[r.status]} ${
+            r.status === "running" ? "animate-pulse" : ""
+          }`}
+        />
       ))}
     </span>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function BigMetric({ label, value }: { label: string; value: string }) {
   return (
-    <span className="flex items-baseline gap-2">
-      <span className="label">{label}</span>
-      <span className="text-cream">{value}</span>
+    <div className="bg-surface px-5 py-4">
+      <p className="text-[11px] uppercase tracking-wide text-muted">{label}</p>
+      <p className="mt-1.5 text-[18px] font-semibold text-cream">{value}</p>
+    </div>
+  );
+}
+
+function LatestRunPill({ status }: { status: RunStatus }) {
+  const tone = status === "success" ? "blue" : status === "failed" ? "red" : "lime";
+  const label = status === "success" ? "deploy ok" : status === "failed" ? "deploy failed" : "deploying";
+  return <Badge tone={tone}>{label}</Badge>;
+}
+
+function DeployStatusBadge({ status }: { status?: RunStatus }) {
+  if (!status) {
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-full border border-line text-muted">
+        <CircleDot />
+      </span>
+    );
+  }
+  if (status === "success") {
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-full border border-blue/40 text-blue">
+        <CircleCheck />
+      </span>
+    );
+  }
+  if (status === "failed") {
+    return (
+      <span className="flex h-11 w-11 items-center justify-center rounded-full border border-red-500/40 text-red-400">
+        <CircleX />
+      </span>
+    );
+  }
+  return (
+    <span className="flex h-11 w-11 items-center justify-center rounded-full border border-lime/40 text-lime">
+      <CircleDot className="animate-pulse" />
     </span>
   );
 }
@@ -267,13 +981,87 @@ function Metric({ label, value }: { label: string; value: string }) {
 function RunRow({ run }: { run: DeployRun }) {
   const tone = run.status === "success" ? "blue" : run.status === "failed" ? "red" : "lime";
   return (
-    <li className="flex items-center gap-3 py-2.5 text-[12.5px]">
-      <span className={`h-1.5 w-1.5 rounded-full ${runColor[run.status]}`} />
-      <code className="text-cream">{run.sha}</code>
+    <li className="flex items-center gap-3 px-5 py-3 text-[13px]">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${runColor[run.status]}`} />
+      {run.commitUrl ? (
+        <a
+          href={run.commitUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 font-mono text-cream transition-colors hover:text-lime hover:underline"
+        >
+          {run.sha}
+        </a>
+      ) : (
+        <code className="shrink-0 text-cream">{run.sha}</code>
+      )}
       <span className="min-w-0 flex-1 truncate text-body">{run.message}</span>
       <Badge tone={tone}>{run.status}</Badge>
       <span className="w-16 text-right text-muted">{run.duration}</span>
       <span className="hidden w-16 text-right text-muted sm:inline">{run.when}</span>
+      {run.runUrl ? (
+        <a
+          href={run.runUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 text-muted transition-colors hover:text-cream"
+          aria-label={`open run ${run.sha} on github`}
+        >
+          <ExternalLink />
+        </a>
+      ) : (
+        <span className="w-3.5 shrink-0" />
+      )}
     </li>
   );
+}
+
+// StepIcon maps GitHub's run/step status + conclusion to a status dot/check.
+function StepIcon({ status, conclusion }: { status: GithubStatus; conclusion: GithubConclusion }) {
+  if (status === "completed") {
+    if (conclusion === "success")
+      return <CircleCheck className="shrink-0 text-blue" />;
+    if (conclusion === "failure" || conclusion === "timed_out")
+      return <CircleX className="shrink-0 text-red-400" />;
+    // cancelled / skipped / other
+    return <CircleDot className="shrink-0 text-muted" />;
+  }
+  if (status === "in_progress")
+    return <CircleDot className="shrink-0 animate-pulse text-lime" />;
+  // queued / unknown
+  return <CircleDot className="shrink-0 text-faint" />;
+}
+
+// StepStatusLabel is the short, plain-English status next to a job/step.
+function StepStatusLabel({ status, conclusion }: { status: GithubStatus; conclusion: GithubConclusion }) {
+  let label: string;
+  let cls: string;
+  if (status === "completed") {
+    if (conclusion === "success") {
+      label = "done";
+      cls = "text-blue";
+    } else if (conclusion === "failure" || conclusion === "timed_out") {
+      label = "failed";
+      cls = "text-red-400";
+    } else if (conclusion === "skipped") {
+      label = "skipped";
+      cls = "text-muted";
+    } else if (conclusion === "cancelled") {
+      label = "cancelled";
+      cls = "text-muted";
+    } else {
+      label = "done";
+      cls = "text-muted";
+    }
+  } else if (status === "in_progress") {
+    label = "running";
+    cls = "text-lime";
+  } else if (status === "queued") {
+    label = "queued";
+    cls = "text-faint";
+  } else {
+    label = "waiting";
+    cls = "text-faint";
+  }
+  return <span className={`shrink-0 text-[12px] ${cls}`}>{label}</span>;
 }

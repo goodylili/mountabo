@@ -2,7 +2,9 @@ import { Suspense } from "react";
 import { Header } from "@/components/header";
 import { MonitorView } from "@/components/monitor-view";
 import { getDeployments } from "@/lib/deployments";
-import { getServers, toDisplayServer } from "@/lib/servers";
+import { getServers } from "@/lib/servers";
+import type { SetupOption } from "@/lib/servers";
+import { backendURL } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function MonitorPage() {
@@ -24,8 +26,14 @@ export default async function MonitorPage() {
 }
 
 async function MonitorData() {
-  const [deployments, serverViews] = await Promise.all([getDeployments(), getServers()]);
-  const servers = serverViews.map(toDisplayServer);
+  // Deployments + servers + the hardening catalog all feed the expanded card:
+  // servers (full ServerView) drive the domain and monitoring panels, the
+  // catalog resolves option ids to display names for the confirmation gate.
+  const [deployments, servers, catalog] = await Promise.all([
+    getDeployments(),
+    getServers(),
+    getOptionCatalog(),
+  ]);
 
   const now = new Date();
   const stamp = now.toLocaleTimeString("en-GB", {
@@ -35,7 +43,22 @@ async function MonitorData() {
     timeZone: "GMT",
   });
 
-  return <MonitorView deployments={deployments} servers={servers} stamp={`${stamp} GMT`} />;
+  return (
+    <MonitorView deployments={deployments} servers={servers} catalog={catalog} stamp={`${stamp} GMT`} />
+  );
+}
+
+// Loads the hardening option catalog (id/name/description) from the backend so
+// the monitor can name monitoring tools and gate applies. Returns [] when the
+// backend is unreachable, the monitor falls back to the option ids.
+async function getOptionCatalog(): Promise<SetupOption[]> {
+  try {
+    const resp = await fetch(`${backendURL()}/api/servers/options`, { cache: "no-store" });
+    if (!resp.ok) return [];
+    return (await resp.json()) as SetupOption[];
+  } catch {
+    return [];
+  }
 }
 
 function MonitorSkeleton() {

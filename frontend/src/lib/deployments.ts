@@ -7,6 +7,8 @@ type RunResponse = {
   status: string;
   when: string;
   duration: string;
+  runUrl: string;
+  commitUrl: string;
 };
 
 type EventResponse = { when: string; environment: string };
@@ -16,7 +18,8 @@ type DeploymentResponse = {
   repo: string;
   branch: string;
   serverId: string;
-  url: string;
+  workflowUrl: string;
+  liveUrl: string;
   status: string;
   lastDeploy: string;
   runs: RunResponse[];
@@ -40,7 +43,8 @@ export async function getDeployments(): Promise<Deployment[]> {
       serverId: d.serverId,
       branch: d.branch,
       status: (["live", "idle", "failing"].includes(d.status) ? d.status : "idle") as Deployment["status"],
-      url: d.url,
+      liveUrl: d.liveUrl ?? "",
+      workflowUrl: d.workflowUrl ?? "",
       uptimePct: "n/a",
       lastDeploy: d.lastDeploy,
       metrics: { cpu: "n/a", mem: "n/a", ping: "n/a" },
@@ -50,6 +54,8 @@ export async function getDeployments(): Promise<Deployment[]> {
         status: r.status as RunStatus,
         when: r.when,
         duration: r.duration,
+        runUrl: r.runUrl ?? "",
+        commitUrl: r.commitUrl ?? "",
       })),
       deploys: d.deploys ?? 0,
       timeline: (d.timeline ?? []).map((e) => ({ when: e.when, environment: e.environment })),
