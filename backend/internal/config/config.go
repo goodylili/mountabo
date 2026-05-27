@@ -19,9 +19,18 @@ type Config struct {
 	HTTPAddr        string
 	ShutdownTimeout time.Duration
 	GitHub          GitHubConfig
+	AI              AIConfig
 	// DataDir is where mountabo keeps local state (e.g. servers.json). Defaults
 	// to ~/.mountabo.
 	DataDir string
+}
+
+// AIConfig holds the Anthropic credentials for the AI command helper. APIKey is
+// optional: when empty, the helper reports "not configured" rather than failing,
+// so mountabo runs fine without it. Model overrides the default Claude model.
+type AIConfig struct {
+	APIKey string
+	Model  string
 }
 
 // GitHubConfig holds the OAuth App credentials used to exchange authorization
@@ -41,6 +50,10 @@ func Load() *Config {
 		GitHub: GitHubConfig{
 			ClientID:     os.Getenv("GITHUB_CLIENT_ID"),
 			ClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
+		},
+		AI: AIConfig{
+			APIKey: os.Getenv("ANTHROPIC_API_KEY"),
+			Model:  os.Getenv("MOUNTABO_AI_MODEL"),
 		},
 		DataDir: env("MOUNTABO_DATA_DIR", defaultDataDir()),
 	}

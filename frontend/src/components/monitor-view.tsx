@@ -39,6 +39,7 @@ import {
 import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetchServerLogs } from "@/lib/server-logs";
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
+import { type DashboardTool, dashboardPath, installedDashboards } from "@/lib/dashboards";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -195,15 +196,16 @@ export function MonitorView({
     <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-16 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       <div className="rise flex items-start justify-between gap-4 sm:gap-6">
         <div>
-          <p className="label">live status · {stamp}</p>
+          <p className="label">deployments · {stamp}</p>
           <h1 className="mt-6 text-4xl font-extrabold leading-[1.02] tracking-tight text-cream sm:text-5xl sm:leading-[0.98] lg:text-6xl">
-            everything you ship,
+            every deployment,
             <br />
-            still <span className="italic text-lime">watched.</span>
+            and how it is <span className="italic text-lime">running.</span>
           </h1>
           <p className="mt-6 max-w-2xl text-[16px] leading-8 text-body">
-            status is read from your github actions runs and on-demand pings to each server.
-            mountabo checks when you open it: there is no daemon, nothing phones home.
+            open a deployment to walk its github actions run, read its container logs, watch host metrics,
+            open its monitoring dashboards, and manage its domains. mountabo reads it all when you open it:
+            there is no daemon, nothing phones home.
           </p>
         </div>
         <button
@@ -462,131 +464,280 @@ function ExpandedCard({
   const latest = d.runs[0];
   const [owner, repo] = splitRepo(d.repo);
   const live = d.liveUrl ? d.liveUrl.replace(/^https?:\/\//, "") : "";
+  const dashboards = installedDashboards(server?.options);
+
+  // Per-section open/closed state, remembered for as long as the card stays
+  // open. Host metrics and the deploy walkthrough open by default so the most
+  // useful read is visible immediately; the heavier panels start collapsed so
+  // the card is scannable, and each toggles independently.
+  const [sections, setSections] = useState<Record<string, boolean>>({
+    metrics: true,
+    walkthrough: true,
+    runs: false,
+    logs: false,
+    dashboards: dashboards.length > 0,
+    monitoring: false,
+    domains: false,
+    timeline: false,
+  });
+  const toggle = (key: string) => setSections((s) => ({ ...s, [key]: !s[key] }));
 
   return (
-    <div className="space-y-10 border-t border-line px-6 py-8 sm:px-8">
-      {/* deploy status + live link */}
-      <section>
-        <SectionHeader>deployment</SectionHeader>
-        <div className="mt-4 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <DeployStatusBadge status={latest?.status} />
-            <div>
-              <p className="text-[15px] text-cream">
-                {latest
-                  ? latest.status === "success"
-                    ? "latest deployment succeeded"
-                    : latest.status === "failed"
-                      ? "latest deployment failed"
-                      : "deployment is running"
-                  : "no deployment runs yet"}
-              </p>
-              <p className="mt-0.5 text-[12.5px] text-muted">
-                {latest ? `${latest.message} · ${latest.when}` : "trigger a deploy to see status here"}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            {d.liveUrl && (
-              <a
-                href={d.liveUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="cta-glow flex items-center gap-2 rounded-lg bg-lime-fill px-4 py-2.5 text-[13px] font-bold text-black transition-transform hover:-translate-y-0.5"
-              >
-                open {live} <ArrowRight />
-              </a>
-            )}
-            {d.workflowUrl && (
-              <a
-                href={d.workflowUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded-lg border border-line px-4 py-2.5 text-[12.5px] text-muted transition-colors hover:border-line-strong hover:text-cream"
-              >
-                <GithubMark /> actions workflow <ExternalLink />
-              </a>
-            )}
+    <div className="border-t border-line px-6 py-8 sm:px-8">
+      {/* deploy status + live link: the always-visible header of the open card */}
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <DeployStatusBadge status={latest?.status} />
+          <div>
+            <p className="text-[17px] font-medium text-cream">
+              {latest
+                ? latest.status === "success"
+                  ? "latest deployment succeeded"
+                  : latest.status === "failed"
+                    ? "latest deployment failed"
+                    : "deployment is running"
+                : "no deployment runs yet"}
+            </p>
+            <p className="mt-1 text-[14px] text-muted">
+              {latest ? `${latest.message} · ${latest.when}` : "trigger a deploy to see status here"}
+            </p>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {d.liveUrl && (
+            <a
+              href={d.liveUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="cta-glow flex items-center gap-2 rounded-lg bg-lime-fill px-4 py-2.5 text-[14px] font-bold text-black transition-transform hover:-translate-y-0.5"
+            >
+              open {live} <ArrowRight />
+            </a>
+          )}
+          {d.workflowUrl && (
+            <a
+              href={d.workflowUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-lg border border-line px-4 py-2.5 text-[13.5px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+            >
+              <GithubMark /> actions workflow <ExternalLink />
+            </a>
+          )}
+        </div>
+      </div>
 
+      <div className="mt-8 space-y-4">
         {/* host metrics */}
-        <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-          <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
-          <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
-          <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
-          <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
-        </div>
-      </section>
-
-      {/* step-by-step deploy walkthrough from GitHub Actions */}
-      <section>
-        <SectionHeader>deploy walkthrough</SectionHeader>
-        <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
-      </section>
-
-      {/* runs list with clickable GitHub links */}
-      <section>
-        <SectionHeader>recent runs</SectionHeader>
-        {d.runs.length === 0 ? (
-          <p className="mt-4 text-[13px] text-muted">no runs recorded yet.</p>
-        ) : (
-          <ul className="mt-4 divide-y divide-line overflow-hidden rounded-xl border border-line">
-            {d.runs.map((r) => (
-              <RunRow key={r.sha} run={r} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* logs viewer */}
-      <section>
-        <SectionHeader>container logs</SectionHeader>
-        <LogsViewer serverId={d.serverId} ready={Boolean(server)} />
-      </section>
-
-      {/* per-tool monitoring */}
-      <section>
-        <SectionHeader>monitoring tools</SectionHeader>
-        <MonitoringPanel
-          server={server}
-          picked={picked}
-          onPick={onPick}
-          onApply={onApplyMonitoring}
-          optionName={optionName}
-        />
-      </section>
-
-      {/* custom domains */}
-      {server && (
-        <section>
-          <SectionHeader>custom domains</SectionHeader>
-          <div className="mt-4 overflow-hidden rounded-xl border border-line bg-surface">
-            <ServerDomains
-              key={`dom:${(server.domains ?? []).map((dm) => dm.host).join(",")}`}
-              server={server}
-              onAdd={(value) => onAddDomain(server, value)}
-              onRemove={(host) => onRemoveDomain(server, host)}
-            />
+        <CollapsibleSection
+          title="host metrics"
+          hint="cpu, memory, disk and uptime, read over ssh"
+          open={sections.metrics}
+          onToggle={() => toggle("metrics")}
+        >
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
+            <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
+            <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
+            <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
+            <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
           </div>
-        </section>
-      )}
+        </CollapsibleSection>
 
-      {/* deploy timeline */}
-      {(d.timeline?.length ?? 0) > 0 && (
-        <section>
-          <SectionHeader>deploy timeline · {d.deploys ?? 0} total</SectionHeader>
-          <ul className="mt-4 space-y-2.5 text-[13px]">
-            {(d.timeline ?? []).map((e, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                <span className="text-body">configured for {e.environment}</span>
-                <span className="ml-auto text-muted">{e.when}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+        {/* step-by-step deploy walkthrough from GitHub Actions */}
+        <CollapsibleSection
+          title="deploy walkthrough"
+          hint="every github actions job and step, with live status"
+          open={sections.walkthrough}
+          onToggle={() => toggle("walkthrough")}
+        >
+          <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
+        </CollapsibleSection>
+
+        {/* runs list with clickable GitHub links */}
+        <CollapsibleSection
+          title="recent runs"
+          hint={`${d.runs.length} recorded`}
+          open={sections.runs}
+          onToggle={() => toggle("runs")}
+        >
+          {d.runs.length === 0 ? (
+            <p className="text-[14px] text-muted">no runs recorded yet.</p>
+          ) : (
+            <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+              {d.runs.map((r) => (
+                <RunRow key={r.sha} run={r} />
+              ))}
+            </ul>
+          )}
+        </CollapsibleSection>
+
+        {/* logs viewer */}
+        <CollapsibleSection
+          title="container logs"
+          hint="the running containers' recent output, over ssh"
+          open={sections.logs}
+          onToggle={() => toggle("logs")}
+        >
+          <LogsViewer serverId={d.serverId} ready={Boolean(server)} active={sections.logs} />
+        </CollapsibleSection>
+
+        {/* monitoring dashboards reached through the ssh tunnel */}
+        {server && dashboards.length > 0 && (
+          <CollapsibleSection
+            title="monitoring dashboards"
+            hint={`${dashboards.length} reachable through the ssh tunnel`}
+            open={sections.dashboards}
+            onToggle={() => toggle("dashboards")}
+          >
+            <DashboardsPanel serverId={server.id} dashboards={dashboards} active={sections.dashboards} />
+          </CollapsibleSection>
+        )}
+
+        {/* per-tool monitoring install */}
+        <CollapsibleSection
+          title="monitoring tools"
+          hint="install netdata, uptime kuma, ntfy or persistent logs"
+          open={sections.monitoring}
+          onToggle={() => toggle("monitoring")}
+        >
+          <MonitoringPanel
+            server={server}
+            picked={picked}
+            onPick={onPick}
+            onApply={onApplyMonitoring}
+            optionName={optionName}
+          />
+        </CollapsibleSection>
+
+        {/* custom domains */}
+        {server && (
+          <CollapsibleSection
+            title="custom domains"
+            hint={`${(server.domains ?? []).length} configured`}
+            open={sections.domains}
+            onToggle={() => toggle("domains")}
+          >
+            <div className="overflow-hidden rounded-xl border border-line bg-surface">
+              <ServerDomains
+                key={`dom:${(server.domains ?? []).map((dm) => dm.host).join(",")}`}
+                server={server}
+                onAdd={(value) => onAddDomain(server, value)}
+                onRemove={(host) => onRemoveDomain(server, host)}
+              />
+            </div>
+          </CollapsibleSection>
+        )}
+
+        {/* deploy timeline */}
+        {(d.timeline?.length ?? 0) > 0 && (
+          <CollapsibleSection
+            title="deploy timeline"
+            hint={`${d.deploys ?? 0} total`}
+            open={sections.timeline}
+            onToggle={() => toggle("timeline")}
+          >
+            <ul className="space-y-3 text-[14px]">
+              {(d.timeline ?? []).map((e, i) => (
+                <li key={i} className="flex items-center gap-3">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
+                  <span className="text-body">configured for {e.environment}</span>
+                  <span className="ml-auto text-muted">{e.when}</span>
+                </li>
+              ))}
+            </ul>
+          </CollapsibleSection>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// CollapsibleSection is one independently toggleable block of the open card: a
+// large, legible header with an optional hint and a chevron, and its content
+// revealed below when open. The header is a button so the whole row toggles.
+function CollapsibleSection({
+  title,
+  hint,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-xl border border-line bg-surface/40">
+      <button
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-surface-2/40"
+      >
+        <ChevronRight className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />
+        <span className="flex-1">
+          <span className="block text-[17px] font-semibold tracking-tight text-cream">{title}</span>
+          {hint && <span className="mt-0.5 block text-[13px] text-muted">{hint}</span>}
+        </span>
+      </button>
+      {open && <div className="px-5 pb-6 pt-1 sm:px-6">{children}</div>}
+    </section>
+  );
+}
+
+// DashboardsPanel shows each installed monitoring tool's dashboard, reached
+// through the backend's SSH-tunneled reverse proxy (the tools bind to the
+// server's loopback, so they are never exposed publicly). Netdata embeds in an
+// iframe; tools that lean on websockets (Uptime Kuma, ntfy) get a clear link
+// panel with a one-line note instead of a broken iframe. It only renders once
+// the section is open so an embedded dashboard is not loaded while hidden.
+function DashboardsPanel({
+  serverId,
+  dashboards,
+  active,
+}: {
+  serverId: string;
+  dashboards: DashboardTool[];
+  active: boolean;
+}) {
+  return (
+    <div className="space-y-5">
+      {dashboards.map((tool) => {
+        const href = dashboardPath(serverId, tool.id);
+        return (
+          <div key={tool.id} className="overflow-hidden rounded-xl border border-line bg-surface">
+            <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-3.5">
+              <span className="flex items-center gap-2.5">
+                <span className="h-2 w-2 rounded-full bg-lime" />
+                <span className="text-[15px] font-medium text-cream">{tool.label}</span>
+              </span>
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] text-lime transition-colors hover:bg-lime/10"
+              >
+                open in a tab <ExternalLink />
+              </a>
+            </div>
+            {tool.embed ? (
+              active ? (
+                <iframe
+                  src={href}
+                  title={`${tool.label} dashboard`}
+                  className="h-[520px] w-full border-0 bg-black/40"
+                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                />
+              ) : (
+                <div className="h-[520px] bg-black/40" />
+              )
+            ) : (
+              <p className="px-5 py-5 text-[14px] leading-7 text-body">{tool.note}</p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -792,23 +943,24 @@ function JobLogLines({ lines }: { lines: string[] | null }) {
 
 // LogsViewer fetches and shows the open server's running container logs in a
 // dark, scrollable terminal panel, with a refresh control and an empty state.
-function LogsViewer({ serverId, ready }: { serverId: string; ready: boolean }) {
+function LogsViewer({ serverId, ready, active }: { serverId: string; ready: boolean; active: boolean }) {
   // null = not read yet (shows "reading…"); [] = read, but no logs.
   const [lines, setLines] = useState<string[] | null>(null);
   // Tracks an in-flight refresh triggered from the button (an event handler).
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Read once when the card opens. setState only happens once the fetch
-  // resolves, so the effect never sets state synchronously.
+  // Read once the section is open (not just the card), so collapsed logs do not
+  // pull over SSH until the operator expands them. setState only happens once
+  // the fetch resolves, so the effect never sets state synchronously.
   useEffect(() => {
-    if (!serverId) return;
+    if (!serverId || !active || lines !== null) return;
     const ctrl = new AbortController();
     fetchServerLogs(serverId, 200, ctrl.signal).then((res) => {
       if (!ctrl.signal.aborted) setLines(res?.lines ?? []);
     });
     return () => ctrl.abort();
-  }, [serverId]);
+  }, [serverId, active, lines]);
 
   // Manual refresh from the button (an event handler, not an effect).
   async function refresh() {
@@ -1006,10 +1158,6 @@ function Summary({
       <span className="text-[13px] text-muted">{label}</span>
     </span>
   );
-}
-
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">{children}</h2>;
 }
 
 function RunStrip({ runs }: { runs: DeployRun[] }) {

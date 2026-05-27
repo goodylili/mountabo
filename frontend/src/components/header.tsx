@@ -95,6 +95,14 @@ export function Header({
               >
                 deployments
               </Link>
+              <Link
+                href="/terminal"
+                className={
+                  pathname?.startsWith("/terminal") ? "text-cream" : "transition-colors hover:text-cream"
+                }
+              >
+                terminal
+              </Link>
             </nav>
             <span className="hidden h-4 w-px bg-line sm:block" />
             <span className="flex min-w-0 items-center gap-2 text-cream">

@@ -15,6 +15,7 @@ import (
 
 	httpadapter "github.com/goodylili/mountabo/internal/adapter/http"
 	"github.com/goodylili/mountabo/internal/adapter/repository"
+	"github.com/goodylili/mountabo/internal/ai"
 	"github.com/goodylili/mountabo/internal/config"
 	"github.com/goodylili/mountabo/internal/github"
 	"github.com/goodylili/mountabo/internal/keychain"
@@ -71,7 +72,10 @@ func run() error {
 	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
 	serverMetricsSvc := usecase.NewServerMetricsService(serverStore, keyStore, sshClient)
 	serverLogsSvc := usecase.NewServerLogsService(serverStore, keyStore, sshClient)
-	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, logger)
+	// The dashboard service reverse proxies a server's loopback monitoring UIs
+	// (Netdata/Uptime Kuma/ntfy) by tunneling HTTP over the same ssh.Client.
+	serverDashboardSvc := usecase.NewServerDashboardService(serverStore, keyStore, sshClient)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, serverDashboardSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
 	// environment/secrets (all github), reading the server record (JSON store)
@@ -98,7 +102,18 @@ func run() error {
 	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, keyStore, ghClient, serverStore)
 	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
 
-	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler)
+	// Compose the terminal page: run a single operator command on a set-up server
+	// over SSH (the same ssh.Client + server store + keychain key the read-only
+	// metrics/logs services use), and an AI command helper backed by Anthropic.
+	// The AI client reads ANTHROPIC_API_KEY from config; an empty key makes the
+	// helper return a structured "not configured" result instead of failing. The
+	// helper only suggests, the operator runs the command through /exec.
+	serverExecSvc := usecase.NewServerExecService(serverStore, keyStore, sshClient)
+	aiClient := ai.NewClient(cfg.AI.APIKey, cfg.AI.Model)
+	aiCommandSvc := usecase.NewAICommandService(aiClient)
+	terminalHandler := httpadapter.NewTerminalHandler(serverExecSvc, aiCommandSvc, logger)
+
+	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler, terminalHandler)
 	srv := httpadapter.NewServer(cfg, router)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
