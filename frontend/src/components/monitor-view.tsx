@@ -923,24 +923,22 @@ function DashboardCard({
           <span className="h-2 w-2 rounded-full bg-lime" />
           <span className="text-[15px] font-medium text-cream">{tool.label}</span>
         </span>
-        {url && (
+      </div>
+      {url ? (
+        <div className="flex flex-col items-center justify-center gap-3 bg-black/40 px-5 py-10 text-center">
+          <p className="max-w-md text-[14px] leading-7 text-body">
+            the {tool.label} dashboard is ready over the ssh tunnel. it cannot be embedded here, so it
+            opens in a new tab where you can view and configure your monitors.
+          </p>
           <a
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 rounded-md border border-line px-3 py-1.5 text-[13px] text-lime transition-colors hover:bg-lime/10"
+            className="flex items-center gap-2 rounded-md border border-lime/50 bg-lime/[0.08] px-4 py-2 text-[13px] font-medium text-lime transition-colors hover:bg-lime/[0.16]"
           >
-            open in a tab <ExternalLink />
+            open {tool.label} <ExternalLink />
           </a>
-        )}
-      </div>
-      {url ? (
-        <iframe
-          src={url}
-          title={`${tool.label} dashboard`}
-          className="h-[520px] w-full border-0 bg-black/40"
-          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-        />
+        </div>
       ) : errored ? (
         <div className="flex h-[200px] flex-col items-center justify-center gap-3 bg-black/40 px-5 text-center">
           <p className="text-[14px] leading-7 text-body">

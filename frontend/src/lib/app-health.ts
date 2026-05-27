@@ -30,12 +30,17 @@ export async function fetchAppHealth(app: string, signal?: AbortSignal): Promise
   }
 }
 
-// deleteDeployment forgets mountabo's tracking of a deployment by its app name.
-// Returns true when the backend removed it (or it was already gone, 404), false
-// on any other failure, so the caller can decide whether to drop the card.
+// deleteDeployment tears down a deployment by its app name (stops the container,
+// removes the deploy workflow, forgets the record). Returns true only when the
+// backend confirms removal (2xx, or 404 meaning it was already gone), false on
+// any other status or failure, so the caller drops the card only on real
+// success. The teardown does SSH and GitHub work, so it is given a long timeout.
 export async function deleteDeployment(app: string): Promise<boolean> {
   try {
-    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}`, { method: "DELETE" });
+    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}`, {
+      method: "DELETE",
+      signal: AbortSignal.timeout(90_000),
+    });
     return resp.ok || resp.status === 404;
   } catch {
     return false;

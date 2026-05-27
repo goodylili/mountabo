@@ -186,7 +186,12 @@ export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/%s -o IdentitiesOnly=yes -o StrictHost
 }
 
 // clonePull clones the repo on first deploy, or fast-forwards it on later ones.
-const clonePull = `mkdir -p "$(dirname "$DEPLOY_DIR")"
+// DEPLOY_DIR often lives under a root-owned path such as /opt, where the deploy
+// user cannot create directories, so it is created with sudo (the bootstrap
+// grants the deploy user passwordless sudo) and then handed to the deploy user
+// so git and docker run without root from here on.
+const clonePull = `sudo mkdir -p "$DEPLOY_DIR"
+sudo chown -R "$(id -un):$(id -gn)" "$(dirname "$DEPLOY_DIR")"
 
 if [ -d "$DEPLOY_DIR/.git" ]; then
   echo "Pulling latest changes..."
