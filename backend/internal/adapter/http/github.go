@@ -19,13 +19,14 @@ type GitHubHandler struct {
 	connector  *usecase.GitHubConnector
 	tree       *usecase.TreeService
 	envExample *usecase.EnvExampleService
+	runSteps   *usecase.RunStepsService
 	log        *slog.Logger
 }
 
 // NewGitHubHandler wires the handler to the connector, the repo-tree service,
-// the env-example service, and a logger.
-func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, envExample *usecase.EnvExampleService, log *slog.Logger) *GitHubHandler {
-	return &GitHubHandler{connector: connector, tree: tree, envExample: envExample, log: log}
+// the env-example service, the run-steps service, and a logger.
+func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, envExample *usecase.EnvExampleService, runSteps *usecase.RunStepsService, log *slog.Logger) *GitHubHandler {
+	return &GitHubHandler{connector: connector, tree: tree, envExample: envExample, runSteps: runSteps, log: log}
 }
 
 type exchangeRequest struct {
@@ -232,6 +233,39 @@ func (h *GitHubHandler) EnvExample(w nethttp.ResponseWriter, r *nethttp.Request)
 	out := make([]string, 0, len(keys))
 	out = append(out, keys...)
 	h.writeJSON(w, nethttp.StatusOK, out)
+}
+
+// RunSteps reports the latest deploy run's job and step progress for owner/repo
+// on a branch, so the UI can show each GitHub Actions step's live status. owner
+// and repo are required; ref is the branch (defaulting to "main"). A workflow
+// with no run yet returns an empty result, not an error. Not-connected is
+// reported as 401.
+func (h *GitHubHandler) RunSteps(w nethttp.ResponseWriter, r *nethttp.Request) {
+	q := r.URL.Query()
+	owner, repo := q.Get("owner"), q.Get("repo")
+	if owner == "" || repo == "" {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner or repo")
+		return
+	}
+	ref := q.Get("ref")
+	if ref == "" {
+		ref = "main"
+	}
+
+	steps, err := h.runSteps.Steps(r.Context(), owner, repo, ref)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("read run steps failed", "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not read the deploy run steps")
+		return
+	}
+	if steps.Jobs == nil {
+		steps.Jobs = []usecase.RunJob{}
+	}
+	h.writeJSON(w, nethttp.StatusOK, steps)
 }
 
 // Disconnect removes the stored token from the keychain.

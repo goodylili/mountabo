@@ -8,25 +8,27 @@ import (
 	"io"
 	"log/slog"
 	nethttp "net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 )
 
-// ServersHandler serves the add-server, list, live-setup, port-check, and
-// host-metrics endpoints.
+// ServersHandler serves the add-server, list, live-setup, port-check,
+// host-metrics, and app-logs endpoints.
 type ServersHandler struct {
 	svc     *usecase.ServerService
 	ports   *usecase.ServerPortService
 	metrics *usecase.ServerMetricsService
+	logs    *usecase.ServerLogsService
 	log     *slog.Logger
 }
 
-// NewServersHandler wires the handler to the server service, the port-check and
-// metrics services, and a logger.
-func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, metrics *usecase.ServerMetricsService, log *slog.Logger) *ServersHandler {
-	return &ServersHandler{svc: svc, ports: ports, metrics: metrics, log: log}
+// NewServersHandler wires the handler to the server service, the port-check,
+// metrics and logs services, and a logger.
+func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, metrics *usecase.ServerMetricsService, logs *usecase.ServerLogsService, log *slog.Logger) *ServersHandler {
+	return &ServersHandler{svc: svc, ports: ports, metrics: metrics, logs: logs, log: log}
 }
 
 // Metrics reports a server's live host health (cpu/load, memory, disk, uptime),
@@ -44,6 +46,32 @@ func (h *ServersHandler) Metrics(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 	h.writeJSON(w, nethttp.StatusOK, metrics)
+}
+
+// Logs reports the deployed app's recent container logs from a server, read
+// over SSH, so the monitor can show real output instead of pointing the
+// operator at the box. The optional ?tail= query bounds how many trailing lines
+// to return (default 200, capped at 1000). Not-found is 404.
+func (h *ServersHandler) Logs(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	tail := 0
+	if raw := r.URL.Query().Get("tail"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			tail = n
+		}
+	}
+
+	lines, err := h.logs.Logs(r.Context(), id, tail)
+	if errors.Is(err, usecase.ErrServerNotFound) {
+		h.writeError(w, nethttp.StatusNotFound, "server not found")
+		return
+	}
+	if err != nil {
+		h.log.Error("read server logs failed", "id", id, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not read server logs")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, map[string][]string{"lines": lines})
 }
 
 // Ports reports the ports already listening on a server so the configure UI can

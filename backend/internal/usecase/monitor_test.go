@@ -39,7 +39,9 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 		{At: now.Add(-time.Minute), Environment: "main"},
 		{At: now.Add(-time.Hour), Environment: "main"},
 	}}
-	svc := NewMonitorService(deps, events, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs)
+	servers := newMemServerStore()
+	_ = servers.Save(Server{ID: "s1", IP: "203.0.113.7"})
+	svc := NewMonitorService(deps, events, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs, servers)
 
 	got, err := svc.History(context.Background())
 	if err != nil {
@@ -52,6 +54,16 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 	// Latest run is a success, so the deployment reads as live.
 	if d.Repo != "acme/shop" || d.Status != "live" {
 		t.Errorf("unexpected status: %+v", d)
+	}
+	// With no domain, the live URL is the server's IP over HTTP.
+	if d.LiveURL != "http://203.0.113.7" {
+		t.Errorf("liveURL = %q, want http://203.0.113.7", d.LiveURL)
+	}
+	if d.WorkflowURL != "https://github.com/acme/shop/actions/workflows/mountabo-deploy-main.yml" {
+		t.Errorf("workflowURL = %q", d.WorkflowURL)
+	}
+	if d.Runs[0].CommitURL != "https://github.com/acme/shop/commit/abcdef1234" {
+		t.Errorf("run[0] commitURL = %q", d.Runs[0].CommitURL)
 	}
 	// Tracking: total deploy count + recent timeline surfaced.
 	if d.Deploys != 3 {
@@ -72,7 +84,7 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 }
 
 func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
-	svc := NewMonitorService(&fakeDeploymentStore{}, fakeEventReader{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{})
+	svc := NewMonitorService(&fakeDeploymentStore{}, fakeEventReader{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore())
 	got, err := svc.History(context.Background())
 	if err != nil {
 		t.Fatalf("History: %v", err)
@@ -84,7 +96,7 @@ func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
 
 func TestMonitorHistory_NotConnected(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{{Owner: "a", Repo: "r", Branch: "main"}}}
-	svc := NewMonitorService(deps, fakeEventReader{}, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{})
+	svc := NewMonitorService(deps, fakeEventReader{}, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{}, newMemServerStore())
 	if _, err := svc.History(context.Background()); !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("want ErrNotConnected, got %v", err)
 	}

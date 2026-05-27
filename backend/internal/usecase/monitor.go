@@ -38,6 +38,9 @@ type WorkflowRun struct {
 	Conclusion string // success | failure | ... (set once completed)
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// HTMLURL is the Actions run page on github.com, so the UI can link straight
+	// to the run.
+	HTMLURL string
 }
 
 // WorkflowRunLister lists recent runs of a repo's workflow file on a branch,
@@ -48,11 +51,13 @@ type WorkflowRunLister interface {
 
 // RunView is one deploy run shaped for the UI.
 type RunView struct {
-	SHA      string `json:"sha"`
-	Message  string `json:"message"`
-	Status   string `json:"status"` // success | failed | running
-	When     string `json:"when"`
-	Duration string `json:"duration"`
+	SHA       string `json:"sha"`
+	Message   string `json:"message"`
+	Status    string `json:"status"` // success | failed | running
+	When      string `json:"when"`
+	Duration  string `json:"duration"`
+	RunURL    string `json:"runUrl"`    // the Actions run page on github.com
+	CommitURL string `json:"commitUrl"` // the run's commit on github.com
 }
 
 // DeployEvent is one recorded deploy from the append-only tracking log.
@@ -76,11 +81,18 @@ type EventView struct {
 // DeploymentStatus is a configured deployment plus its recent run history,
 // ready for the monitor UI.
 type DeploymentStatus struct {
-	App        string      `json:"app"`
-	Repo       string      `json:"repo"`
-	Branch     string      `json:"branch"`
+	App    string `json:"app"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	// WorkflowURL is the deploy workflow file's Actions page on github.com (where
+	// the run history lives). This is the value the field previously named "url"
+	// carried; it was renamed so its meaning is explicit alongside LiveURL.
+	WorkflowURL string `json:"workflowUrl"`
+	// LiveURL points at the running app itself: the server's custom domain when
+	// one is configured, otherwise the server's IP and the app's deploy port.
+	// Empty when the app's address cannot be derived.
+	LiveURL    string      `json:"liveUrl"`
 	ServerID   string      `json:"serverId"`
-	URL        string      `json:"url"`
 	Status     string      `json:"status"` // live | idle | failing
 	LastDeploy string      `json:"lastDeploy"`
 	Runs       []RunView   `json:"runs"`
@@ -102,11 +114,13 @@ type MonitorService struct {
 	events      DeployEventReader
 	tokens      TokenStore
 	runs        WorkflowRunLister
+	servers     ServerStore
 }
 
-// NewMonitorService wires the service to its ports.
-func NewMonitorService(deployments DeploymentStore, events DeployEventReader, tokens TokenStore, runs WorkflowRunLister) *MonitorService {
-	return &MonitorService{deployments: deployments, events: events, tokens: tokens, runs: runs}
+// NewMonitorService wires the service to its ports. The server store is read to
+// derive each deployment's live app URL (its domain, or its IP).
+func NewMonitorService(deployments DeploymentStore, events DeployEventReader, tokens TokenStore, runs WorkflowRunLister, servers ServerStore) *MonitorService {
+	return &MonitorService{deployments: deployments, events: events, tokens: tokens, runs: runs, servers: servers}
 }
 
 // History lists every configured deployment with its recent runs. It returns
@@ -126,6 +140,16 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 		return nil, fmt.Errorf("load token: %w", err)
 	}
 
+	// Index the servers by id so each deployment can derive its live app URL
+	// (domain or IP) without a per-deployment lookup. A failure to read them is
+	// not fatal: deployments still appear, just without a live URL.
+	serversByID := map[string]Server{}
+	if servers, serr := s.servers.List(); serr == nil {
+		for _, sv := range servers {
+			serversByID[sv.ID] = sv
+		}
+	}
+
 	// Each deployment needs an independent GitHub Actions lookup, so fan them out
 	// (bounded) rather than paying for them one after another: the page used to
 	// block on the sum of every deployment's round-trip. Each goroutine writes
@@ -139,7 +163,7 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 			// permission, or has no runs yet still appears, just without runs.
 			runs, _ := s.runs.ListWorkflowRuns(gctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit)
 			events, total, _ := s.events.DeployEvents(d.Owner, d.Repo, d.Branch, monitorEventLimit)
-			out[i] = buildStatus(d, runs, events, total)
+			out[i] = buildStatus(d, serversByID[d.ServerID], runs, events, total)
 			return nil
 		})
 	}
@@ -148,27 +172,32 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 }
 
 // buildStatus assembles a deployment's UI status from its recent runs (newest
-// first); the latest run sets the headline status and last-deploy time.
-func buildStatus(d Deployment, runs []WorkflowRun, events []DeployEvent, deploys int) DeploymentStatus {
+// first); the latest run sets the headline status and last-deploy time. server
+// is the deployment's target (zero value when it can't be resolved), used to
+// derive the live app URL.
+func buildStatus(d Deployment, server Server, runs []WorkflowRun, events []DeployEvent, deploys int) DeploymentStatus {
 	st := DeploymentStatus{
-		App:        d.App,
-		Repo:       d.Owner + "/" + d.Repo,
-		Branch:     d.Branch,
-		ServerID:   d.ServerID,
-		URL:        fmt.Sprintf("https://github.com/%s/%s/actions/workflows/%s", d.Owner, d.Repo, d.WorkflowFile),
-		Status:     "idle",
-		LastDeploy: "n/a",
-		Runs:       make([]RunView, 0, len(runs)),
-		Deploys:    deploys,
-		Timeline:   make([]EventView, 0, len(events)),
+		App:         d.App,
+		Repo:        d.Owner + "/" + d.Repo,
+		Branch:      d.Branch,
+		ServerID:    d.ServerID,
+		WorkflowURL: fmt.Sprintf("https://github.com/%s/%s/actions/workflows/%s", d.Owner, d.Repo, d.WorkflowFile),
+		LiveURL:     liveURL(server),
+		Status:      "idle",
+		LastDeploy:  "n/a",
+		Runs:        make([]RunView, 0, len(runs)),
+		Deploys:     deploys,
+		Timeline:    make([]EventView, 0, len(events)),
 	}
 	for i, r := range runs {
 		view := RunView{
-			SHA:      shortSHA(r.SHA),
-			Message:  r.Title,
-			Status:   runStatus(r),
-			When:     relativeTime(r.CreatedAt),
-			Duration: runDuration(r),
+			SHA:       shortSHA(r.SHA),
+			Message:   r.Title,
+			Status:    runStatus(r),
+			When:      relativeTime(r.CreatedAt),
+			Duration:  runDuration(r),
+			RunURL:    r.HTMLURL,
+			CommitURL: commitURL(d.Owner, d.Repo, r.SHA),
 		}
 		st.Runs = append(st.Runs, view)
 		if i == 0 {
@@ -180,6 +209,30 @@ func buildStatus(d Deployment, runs []WorkflowRun, events []DeployEvent, deploys
 		st.Timeline = append(st.Timeline, EventView{When: relativeTime(e.At), Environment: e.Environment})
 	}
 	return st
+}
+
+// commitURL is the github.com page for a run's commit, or "" when the sha is
+// unknown.
+func commitURL(owner, repo, sha string) string {
+	if sha == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/commit/%s", owner, repo, sha)
+}
+
+// liveURL points at the running app on its server: a configured custom domain
+// over HTTPS when one exists, otherwise the server's IP over HTTP with the
+// app's port. The port is taken from a domain's upstream when one is set;
+// absent that it is unknown, so it is omitted (a plain host URL). It returns ""
+// when the server (and so its address) is unknown.
+func liveURL(server Server) string {
+	if len(server.Domains) > 0 {
+		return "https://" + server.Domains[0].Host
+	}
+	if server.IP == "" {
+		return ""
+	}
+	return "http://" + server.IP
 }
 
 // runStatus collapses GitHub's status+conclusion into the UI's three states.

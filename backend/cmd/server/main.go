@@ -57,7 +57,10 @@ func run() error {
 	// .env.example discovery: read the repo's example env file so the configure
 	// form can pre-fill the env var rows for the operator to fill in.
 	envExampleSvc := usecase.NewEnvExampleService(keyStore, ghClient)
-	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, envExampleSvc, logger)
+	// Run-step progress: read the latest deploy run's jobs + steps so the UI can
+	// show each GitHub Actions step's live status, with the same keychain token.
+	runStepsSvc := usecase.NewRunStepsService(keyStore, ghClient)
+	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, envExampleSvc, runStepsSvc, logger)
 
 	// Compose the server flow: SSH probe + bootstrap + key generation (all ssh),
 	// JSON-file persistence, and keychain secrets. One ssh.Client serves probe,
@@ -67,7 +70,8 @@ func run() error {
 	serverSvc := usecase.NewServerService(serverStore, sshClient, sshClient, sshClient, sshClient, sshClient, sshClient, keyStore)
 	serverPortSvc := usecase.NewServerPortService(serverStore, keyStore, sshClient)
 	serverMetricsSvc := usecase.NewServerMetricsService(serverStore, keyStore, sshClient)
-	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, logger)
+	serverLogsSvc := usecase.NewServerLogsService(serverStore, keyStore, sshClient)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
 	// environment/secrets (all github), reading the server record (JSON store)
@@ -88,9 +92,10 @@ func run() error {
 	deploySvc := usecase.NewDeployService(serverStore, keyStore, keyStore, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient)
 	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
 
-	// Compose the monitor: configured deployments (JSON store) enriched with
-	// their GitHub Actions runs (github), read with the keychain token.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, keyStore, ghClient)
+	// Compose the monitor: configured deployments (SQLite store) enriched with
+	// their GitHub Actions runs (github), read with the keychain token, and the
+	// server store so each deployment can surface its live app URL.
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, keyStore, ghClient, serverStore)
 	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
 
 	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler)
