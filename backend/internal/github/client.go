@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
 	gogithub "github.com/google/go-github/v88/github"
@@ -175,6 +176,10 @@ func listInstallationRepos(ctx context.Context, api *gogithub.Client) ([]*gogith
 	return out, nil
 }
 
+// annotateBudget caps the per-repo container-detection fan-out so the repo list
+// never blocks for long, regardless of account size or GitHub rate limits.
+const annotateBudget = 12 * time.Second
+
 // annotateDocker sets each repo's container Kind ("compose"/"docker"/"none")
 // and HasDocker by inspecting its root directory. It fans the per-repo lookups
 // out with bounded concurrency (one GitHub call per repo), writing only to its
@@ -182,8 +187,14 @@ func listInstallationRepos(ctx context.Context, api *gogithub.Client) ([]*gogith
 // error) leaves Kind "none" rather than failing the whole listing, so it is
 // best-effort and never blocks the repo list.
 func annotateDocker(ctx context.Context, api *gogithub.Client, repos []usecase.Repo) {
+	// Bound the whole fan-out: one GitHub call per repo, so a large account (or a
+	// secondary rate limit) must not make the repo list crawl. Repos not resolved
+	// in the budget keep kind "none"; the next (cached-miss) load fills them in.
+	ctx, cancel := context.WithTimeout(ctx, annotateBudget)
+	defer cancel()
+
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(8) // bound concurrent GitHub calls
+	g.SetLimit(12) // bound concurrent GitHub calls
 	for i := range repos {
 		// each goroutine writes only its own slice element, so no element is shared
 		g.Go(func() error {

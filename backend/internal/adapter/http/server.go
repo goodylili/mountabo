@@ -12,15 +12,18 @@ import (
 
 // NewServer builds the local API server. Timeouts are set defensively even
 // though the listener is loopback-only: ReadHeaderTimeout bounds slow-header
-// clients, and the write timeout comfortably covers the round trips to GitHub
-// that a token exchange makes.
+// clients. WriteTimeout is generous because some reads fan out to GitHub for
+// every repo (listing + per-repo container detection) and can legitimately take
+// many seconds on large accounts; a tight 30s here made the repo list fail with
+// an i/o timeout and the UI retry into an empty list. Streaming handlers clear
+// the deadline entirely (see streamSSE).
 func NewServer(cfg *config.Config, handler nethttp.Handler) *nethttp.Server {
 	return &nethttp.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 }
