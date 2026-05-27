@@ -12,7 +12,8 @@ import (
 	githuboauth "golang.org/x/oauth2/github"
 )
 
-// OAuth performs the GitHub App user-to-server web flow's token exchange. The
+// OAuth performs the GitHub OAuth App web flow's token exchange (the requested
+// scopes, e.g. repo + workflow, are set at authorize time on the frontend). The
 // client secret stays on this machine: it is only ever sent directly to
 // GitHub's token endpoint over TLS and is never logged or returned to callers.
 type OAuth struct {

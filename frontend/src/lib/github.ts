@@ -1,15 +1,20 @@
 // Single source of truth for the GitHub access mountabo asks for.
 //
-// mountabo connects as a GitHub App via the user-to-server web authorization
-// flow. Unlike classic OAuth apps, a GitHub App takes no `scope` parameter, the
-// access it has is fixed by the App's configured permissions. The list below is
-// the human-readable view of those permissions, each mapping to one of mountabo's
-// on-repo actions: add a deploy key, write the deploy workflow file, and set the
-// Actions secrets the workflow reads. The connect screen renders it verbatim so
-// the user sees exactly what they are granting.
+// mountabo connects as a classic OAuth App via the web authorization flow. The
+// `repo` scope returns ALL of a user's repositories, public and private, owned
+// and organization, regardless of any per-repo install (unlike a GitHub App,
+// which only sees repos it was installed on). `workflow` is required to write
+// the deploy workflow file. The list below is the human-readable view of the
+// scopes; the connect screen renders it verbatim so the user sees what they
+// grant.
+
+// GITHUB_SCOPES are the OAuth scopes requested at authorize time. `repo` covers
+// reading every repo plus writing deploy keys and Actions secrets; `workflow`
+// is needed to commit .github/workflows files.
+export const GITHUB_SCOPES = ["repo", "workflow"];
 
 export type GithubPermission = {
-  /** The GitHub App permission name. */
+  /** The OAuth scope name. */
   permission: string;
   label: string;
   access: "read" | "write" | "read + write";
@@ -19,46 +24,26 @@ export type GithubPermission = {
 
 export const GITHUB_PERMISSIONS: GithubPermission[] = [
   {
-    permission: "contents",
-    label: "repository contents",
+    permission: "repo",
+    label: "repositories",
     access: "read + write",
     reason:
-      "read your repository and write .github/workflows/mountabo-deploy.yml into it.",
+      "list all your repositories (public and private), commit the deploy script + workflow, add the read-only deploy key, and set the Actions secrets the workflow reads.",
   },
   {
-    permission: "administration",
-    label: "repository administration",
-    access: "read + write",
-    reason: "add the read-only SSH deploy key to your repository.",
-  },
-  {
-    permission: "secrets",
-    label: "actions secrets",
-    access: "read + write",
-    reason:
-      "store the three Actions secrets the workflow needs (SERVER_IP, SERVER_USER, SSH_PRIVATE_KEY).",
-  },
-  {
-    permission: "workflows",
+    permission: "workflow",
     label: "actions workflows",
     access: "write",
-    reason: "create and update the deploy workflow file under .github/workflows.",
-  },
-  {
-    permission: "metadata",
-    label: "repository metadata",
-    access: "read",
-    reason: "the baseline read access GitHub requires of every app.",
+    reason: "create and update the deploy workflow under .github/workflows.",
   },
 ];
 
 export const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 
 /**
- * Build the GitHub App user-authorization URL. Called server-side from the
- * authorize route. A GitHub App takes no `scope` parameter (permissions come
- * from the App configuration, see GITHUB_PERMISSIONS), so we send only the
- * client_id, redirect_uri, and a CSRF state.
+ * Build the GitHub OAuth App authorization URL. Called server-side from the
+ * authorize route. The requested scopes (GITHUB_SCOPES) determine the access of
+ * the resulting token, `repo` is what makes every repository visible.
  */
 export function buildAuthorizeUrl(opts: {
   clientId: string;
@@ -69,6 +54,7 @@ export function buildAuthorizeUrl(opts: {
     client_id: opts.clientId,
     redirect_uri: opts.redirectUri,
     state: opts.state,
+    scope: GITHUB_SCOPES.join(" "),
     allow_signup: "false",
   });
   return `${GITHUB_AUTHORIZE_URL}?${params.toString()}`;
