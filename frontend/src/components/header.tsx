@@ -88,12 +88,12 @@ export function Header({
                 deploy
               </Link>
               <Link
-                href="/monitor"
+                href="/deployments"
                 className={
-                  pathname?.startsWith("/monitor") ? "text-cream" : "transition-colors hover:text-cream"
+                  pathname?.startsWith("/deployments") ? "text-cream" : "transition-colors hover:text-cream"
                 }
               >
-                monitor
+                deployments
               </Link>
             </nav>
             <span className="hidden h-4 w-px bg-line sm:block" />

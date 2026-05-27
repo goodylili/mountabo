@@ -14,7 +14,7 @@ export default async function MonitorPage() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header crumbs={[{ label: "monitor" }]} account={account} container="max-w-[1100px]" />
+      <Header crumbs={[{ label: "deployments" }]} account={account} container="max-w-[1100px]" />
       {/* /api/deployments fans out to GitHub Actions for every deployment, so it
           is the slow call here. Suspense lets the shell paint now and streams the
           monitor in when ready, instead of blocking the whole page on it. */}

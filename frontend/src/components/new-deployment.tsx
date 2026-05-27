@@ -420,9 +420,9 @@ export function NewDeployment({
             <span className="text-muted">↳ {filteredSources.length} visible</span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-line px-5 py-2.5">
-            <span className="flex items-center gap-2">
-              <span className="text-[11px] text-faint">visibility</span>
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 border-b border-line px-5 py-4">
+            <span className="flex items-center gap-3">
+              <span className="text-[12px] font-medium uppercase tracking-wide text-muted">visibility</span>
               <FilterChips
                 value={visibility}
                 onChange={(v) => {
@@ -436,8 +436,8 @@ export function NewDeployment({
                 ]}
               />
             </span>
-            <span className="flex items-center gap-2">
-              <span className="text-[11px] text-faint">container</span>
+            <span className="flex items-center gap-3">
+              <span className="text-[12px] font-medium uppercase tracking-wide text-muted">container</span>
               <FilterChips
                 value={container}
                 onChange={(v) => {
@@ -954,7 +954,8 @@ function applyUrl(
   return `/api/servers/${serverId}/options?${qs.toString()}`;
 }
 
-// FilterChips is a small segmented control: one active value out of a few.
+// FilterChips is a segmented control: one active value out of a few, in a
+// bordered track so the options read clearly and the active one stands out.
 function FilterChips<T extends string>({
   value,
   onChange,
@@ -965,13 +966,15 @@ function FilterChips<T extends string>({
   options: { v: T; label: string }[];
 }) {
   return (
-    <span className="flex items-center gap-1">
+    <span className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface p-1">
       {options.map((o) => (
         <button
           key={o.v}
           onClick={() => onChange(o.v)}
-          className={`rounded-md px-2 py-1 text-[11px] transition-colors ${
-            value === o.v ? "bg-surface-2 text-cream" : "text-muted hover:text-cream"
+          className={`rounded-md px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+            value === o.v
+              ? "bg-lime/15 text-lime"
+              : "text-muted hover:bg-surface-2 hover:text-cream"
           }`}
         >
           {o.label}
