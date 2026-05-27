@@ -389,6 +389,17 @@ export function ConfigureView({
                       onChange={(e) => setEnv(i, { key: e.target.value })}
                       placeholder="KEY"
                       aria-invalid={badKey}
+                      // Suppress browser/password-manager autofill: the value field
+                      // below is a password input, and without this the browser
+                      // injects a saved login (server ip as username, password as
+                      // value) into these env rows.
+                      name={`env-key-${i}`}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      data-1p-ignore
+                      data-lpignore="true"
                       className={`${inputCls} w-full font-mono ${badKey ? "border-red-400/60" : ""}`}
                     />
                     {badKey && (
@@ -403,6 +414,16 @@ export function ConfigureView({
                     onChange={(e) => setEnv(i, { value: e.target.value })}
                     placeholder="value"
                     type={showValues ? "text" : "password"}
+                    // new-password stops the browser filling a saved password here,
+                    // and the ignore hints keep 1Password/LastPass out, so a saved
+                    // server login is never injected into an env value.
+                    name={`env-value-${i}`}
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    data-1p-ignore
+                    data-lpignore="true"
                     className={`${inputCls} min-w-0 flex-1`}
                   />
                   <button
