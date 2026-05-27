@@ -35,8 +35,8 @@
   --line: #2e2e2e; /* geist border */
   --line-strong: #444444;
   --cream: #ededed; /* geist foreground */
-  --body: #a1a1a1; /* gray-900 */
-  --muted: #888888; /* gray-700 */
+  --body: #b8b8b8; /* lifted for legibility (was #a1a1a1) */
+  --muted: #9a9a9a; /* lifted for legibility (was #888888) */
   --faint: #666666; /* gray-600 */
   --lime: #b6f04a; /* retained green: text / border / tint */
   --lime-dim: #84cc16;
@@ -54,8 +54,8 @@
   --line: #eaeaea; /* geist border */
   --line-strong: #999999;
   --cream: #000000; /* geist foreground */
-  --body: #666666; /* gray-700 */
-  --muted: #888888; /* gray-600 */
+  --body: #525252; /* darker for legibility on white (was #666666) */
+  --muted: #6f6f6f; /* darker for legibility on white (was #888888) */
   --faint: #999999; /* gray-500 */
   --lime: #4d7c0f; /* retained green: readable on white */
   --lime-dim: #3f6b0a;
@@ -73,6 +73,10 @@ body {
   background: var(--bg);
   color: var(--body);
   font-family: var(--font-mono);
+  /* Roomier base for legibility; line-height cascades to text that doesn't set
+     its own leading. Small labels keep their explicit sizes. */
+  font-size: 16px;
+  line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow-x: hidden;

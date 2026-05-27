@@ -29,7 +29,7 @@ export function MonitorView({
   const liveCount = deployments.filter((d) => d.status === "live").length;
 
   return (
-    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
+    <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       <div className="rise flex items-start justify-between gap-4 sm:gap-6">
         <div>
           <p className="label">
@@ -40,7 +40,7 @@ export function MonitorView({
             <br />
             still <span className="italic text-lime">watched.</span>
           </h1>
-          <p className="mt-6 max-w-2xl text-[15px] leading-7 text-body">
+          <p className="mt-6 max-w-2xl text-[16px] leading-8 text-body">
             status is read from your github actions runs and on-demand pings to each server.
             mountabo checks when you open it: there is no daemon, nothing phones home.
           </p>

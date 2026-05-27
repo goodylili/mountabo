@@ -21,7 +21,7 @@ export default async function MonitorPage() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header crumbs={[{ label: "monitor" }]} account={account} container="max-w-[1400px]" />
+      <Header crumbs={[{ label: "monitor" }]} account={account} container="max-w-[1100px]" />
       <MonitorView deployments={deployments} servers={servers} stamp={`${stamp} GMT`} />
     </div>
   );

@@ -18,7 +18,7 @@ export default async function Home() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <Header crumbs={[{ label: "new" }]} account={account} container="max-w-[1400px]" />
+      <Header crumbs={[{ label: "new" }]} account={account} container="max-w-[1100px]" />
       {/* The repo list is the slow call (full GitHub pagination). Suspense lets
           the shell paint now and streams the deployment panel in when ready,
           instead of blocking the whole page on it. */}
@@ -39,7 +39,7 @@ async function DeployData({ account, stamp }: { account: string | null; stamp: s
 
 function DeploySkeleton() {
   return (
-    <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-10 sm:px-6 lg:px-8" aria-busy="true">
+    <main className="mx-auto w-full max-w-[1100px] flex-1 px-4 py-10 sm:px-6 lg:px-8" aria-busy="true">
       <div className="h-3 w-24 animate-pulse rounded bg-surface-2" />
       <div className="mt-5 h-10 w-full max-w-80 animate-pulse rounded-lg bg-surface-2" />
       <div className="mt-8 flex gap-2">

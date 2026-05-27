@@ -142,7 +142,7 @@ export function NewDeployment({
 
   return (
     <>
-    <main className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
+    <main className="mx-auto flex w-full max-w-[1100px] flex-1 flex-col px-4 pb-10 pt-10 sm:px-6 sm:pt-16 lg:px-8">
       {/* hero */}
       <div className="rise">
         <p className="label">
@@ -154,7 +154,7 @@ export function NewDeployment({
           of your <span className="italic text-lime">own</span> by{" "}
           <span className="italic text-lime">yourself.</span>
         </h1>
-        <p className="mt-6 max-w-2xl text-[15px] leading-7 text-body">
+        <p className="mt-6 max-w-2xl text-[16px] leading-8 text-body">
           Vercel Style Frontend for your VPS. pick a source, point it at a server. mountabo writes{" "}
           <span className="text-cream">.github/workflows/mountabo-deploy.yml</span> (or a local
           script) and steps out of the way. no middleman, no surprises, nothing leaves your machine.

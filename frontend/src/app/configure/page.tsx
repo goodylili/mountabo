@@ -39,7 +39,7 @@ export default async function ConfigurePage({
           { label: `${source.name} / configure` },
         ]}
         back
-        container="max-w-[1400px]"
+        container="max-w-[1100px]"
       />
       <ConfigureView source={source} server={server} branch={branch} account={account} />
     </div>

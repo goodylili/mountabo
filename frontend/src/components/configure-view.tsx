@@ -174,11 +174,11 @@ export function ConfigureView({
   }
 
   return (
-    <main className="mx-auto grid w-full max-w-[1400px] flex-1 grid-cols-1 gap-x-12 gap-y-10 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_1fr] lg:px-8 lg:py-10">
+    <main className="mx-auto grid w-full max-w-[1100px] flex-1 grid-cols-1 gap-x-12 gap-y-10 px-4 py-8 sm:px-6 lg:grid-cols-[1fr_1fr] lg:px-8 lg:py-10">
       {/* ── left: the walkthrough form ── */}
       <div className="rise flex flex-col">
         <p className="label">step 02 / 02 · configure</p>
-        <h1 className="mt-5 text-3xl font-extrabold leading-[1.1] tracking-tight text-cream sm:text-4xl sm:leading-[1.05]">
+        <h1 className="mt-5 text-4xl font-extrabold leading-[1.05] tracking-tight text-cream sm:text-5xl sm:leading-[1.02]">
           configure your deployment.
         </h1>
 
@@ -468,8 +468,8 @@ const envNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function Section({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <div className="mt-6">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="mt-8">
+      <div className="mb-2.5 flex items-center justify-between">
         <span className="label">{label}</span>
         {hint && <span className="text-[11px] text-muted">{hint}</span>}
       </div>
