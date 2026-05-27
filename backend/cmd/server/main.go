@@ -89,7 +89,7 @@ func run() error {
 
 	// Compose the monitor: configured deployments (JSON store) enriched with
 	// their GitHub Actions runs (github), read with the refreshing token.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, tokens, ghClient)
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, tokens, ghClient)
 	monitorHandler := httpadapter.NewMonitorHandler(monitorSvc, logger)
 
 	router := httpadapter.NewRouter(githubHandler, serversHandler, deployHandler, monitorHandler)

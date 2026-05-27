@@ -68,6 +68,10 @@ export type Deployment = {
   lastDeploy: string;
   metrics: { cpu: string; mem: string; ping: string };
   runs: DeployRun[];
+  // Tracking (from the SQLite deploy-event log): total times deployed + a recent
+  // timeline (newest first).
+  deploys?: number;
+  timeline?: { when: string; environment: string }[];
 };
 
 // What's currently running where, assembled from GitHub Actions run history +

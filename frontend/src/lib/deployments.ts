@@ -9,6 +9,8 @@ type RunResponse = {
   duration: string;
 };
 
+type EventResponse = { when: string; environment: string };
+
 type DeploymentResponse = {
   app: string;
   repo: string;
@@ -18,6 +20,8 @@ type DeploymentResponse = {
   status: string;
   lastDeploy: string;
   runs: RunResponse[];
+  deploys: number;
+  timeline: EventResponse[];
 };
 
 // getDeployments reads deploy history from the Go backend: the configured
@@ -47,6 +51,8 @@ export async function getDeployments(): Promise<Deployment[]> {
         when: r.when,
         duration: r.duration,
       })),
+      deploys: d.deploys ?? 0,
+      timeline: (d.timeline ?? []).map((e) => ({ when: e.when, environment: e.environment })),
     }));
   } catch {
     return [];

@@ -139,8 +139,8 @@ export function MonitorView({
                 </div>
                 <RunStrip runs={d.runs} />
                 <div className="hidden text-right sm:block">
-                  <span className="block text-[15px] font-medium text-cream">{d.uptimePct}</span>
-                  <span className="block text-[11px] text-muted">{d.lastDeploy}</span>
+                  <span className="block text-[15px] font-medium text-cream">{d.deploys ?? 0} deploys</span>
+                  <span className="block text-[11px] text-muted">last {d.lastDeploy}</span>
                 </div>
               </button>
 
@@ -198,6 +198,21 @@ export function MonitorView({
                       <RunRow key={r.sha} run={r} />
                     ))}
                   </ul>
+
+                  {(d.timeline?.length ?? 0) > 0 && (
+                    <div className="mt-4 border-t border-line pt-4">
+                      <span className="label">deploy timeline · {d.deploys ?? 0} total</span>
+                      <ul className="mt-2 space-y-1.5 text-[12px]">
+                        {d.timeline!.map((e, i) => (
+                          <li key={i} className="flex items-center gap-3">
+                            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
+                            <span className="text-body">configured for {e.environment}</span>
+                            <span className="ml-auto text-muted">{e.when}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
             </section>

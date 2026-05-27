@@ -64,7 +64,10 @@ type DeploymentSQL struct {
 	db *sql.DB
 }
 
-var _ usecase.DeploymentStore = (*DeploymentSQL)(nil)
+var (
+	_ usecase.DeploymentStore   = (*DeploymentSQL)(nil)
+	_ usecase.DeployEventReader = (*DeploymentSQL)(nil)
+)
 
 // NewDeploymentSQL returns a SQLite-backed deployment store over an open db.
 func NewDeploymentSQL(db *sql.DB) *DeploymentSQL {
@@ -131,4 +134,34 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 		return fmt.Errorf("record deploy event: %w", err)
 	}
 	return tx.Commit()
+}
+
+// DeployEvents returns a target's most recent deploys (newest first, capped to
+// limit) from the tracking log, plus the total number ever recorded.
+func (s *DeploymentSQL) DeployEvents(owner, repo, branch string, limit int) ([]usecase.DeployEvent, int, error) {
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM deploy_events WHERE owner = ? AND repo = ? AND branch = ?`,
+		owner, repo, branch).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count deploy events: %w", err)
+	}
+
+	rows, err := s.db.Query(`SELECT at, environment FROM deploy_events
+		WHERE owner = ? AND repo = ? AND branch = ?
+		ORDER BY at DESC, id DESC LIMIT ?`, owner, repo, branch, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query deploy events: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []usecase.DeployEvent
+	for rows.Next() {
+		var e usecase.DeployEvent
+		var at string
+		if err := rows.Scan(&at, &e.Environment); err != nil {
+			return nil, 0, fmt.Errorf("scan deploy event: %w", err)
+		}
+		e.At, _ = time.Parse(time.RFC3339, at)
+		out = append(out, e)
+	}
+	return out, total, rows.Err()
 }

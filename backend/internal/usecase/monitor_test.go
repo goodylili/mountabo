@@ -15,6 +15,15 @@ func (f fakeRunLister) ListWorkflowRuns(_ context.Context, _ Token, owner, repo,
 	return f.runs[owner+"/"+repo], nil
 }
 
+type fakeEventReader struct {
+	events []DeployEvent
+	total  int
+}
+
+func (f fakeEventReader) DeployEvents(_, _, _ string, _ int) ([]DeployEvent, int, error) {
+	return f.events, f.total, nil
+}
+
 func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{
 		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", ServerID: "s1", WorkflowFile: "mountabo-deploy-main.yml"},
@@ -26,7 +35,11 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 			{SHA: "0000000", Title: "older", Status: "completed", Conclusion: "failure", CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
 		},
 	}}
-	svc := NewMonitorService(deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs)
+	events := fakeEventReader{total: 3, events: []DeployEvent{
+		{At: now.Add(-time.Minute), Environment: "main"},
+		{At: now.Add(-time.Hour), Environment: "main"},
+	}}
+	svc := NewMonitorService(deps, events, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs)
 
 	got, err := svc.History(context.Background())
 	if err != nil {
@@ -40,6 +53,13 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 	if d.Repo != "acme/shop" || d.Status != "live" {
 		t.Errorf("unexpected status: %+v", d)
 	}
+	// Tracking: total deploy count + recent timeline surfaced.
+	if d.Deploys != 3 {
+		t.Errorf("deploys = %d, want 3", d.Deploys)
+	}
+	if len(d.Timeline) != 2 || d.Timeline[0].Environment != "main" {
+		t.Errorf("timeline wrong: %+v", d.Timeline)
+	}
 	if len(d.Runs) != 2 {
 		t.Fatalf("want 2 runs, got %d", len(d.Runs))
 	}
@@ -52,7 +72,7 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 }
 
 func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
-	svc := NewMonitorService(&fakeDeploymentStore{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{})
+	svc := NewMonitorService(&fakeDeploymentStore{}, fakeEventReader{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{})
 	got, err := svc.History(context.Background())
 	if err != nil {
 		t.Fatalf("History: %v", err)
@@ -64,7 +84,7 @@ func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
 
 func TestMonitorHistory_NotConnected(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{{Owner: "a", Repo: "r", Branch: "main"}}}
-	svc := NewMonitorService(deps, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{})
+	svc := NewMonitorService(deps, fakeEventReader{}, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{})
 	if _, err := svc.History(context.Background()); !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("want ErrNotConnected, got %v", err)
 	}

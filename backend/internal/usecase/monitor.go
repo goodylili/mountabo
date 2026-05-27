@@ -53,33 +53,57 @@ type RunView struct {
 	Duration string `json:"duration"`
 }
 
+// DeployEvent is one recorded deploy from the append-only tracking log.
+type DeployEvent struct {
+	At          time.Time
+	Environment string
+}
+
+// DeployEventReader reads a target's deploy history from the tracking log: the
+// most recent events (newest first, capped to limit) and the total count.
+type DeployEventReader interface {
+	DeployEvents(owner, repo, branch string, limit int) (events []DeployEvent, total int, err error)
+}
+
+// EventView is one tracked deploy shaped for the UI timeline.
+type EventView struct {
+	When        string `json:"when"`
+	Environment string `json:"environment"`
+}
+
 // DeploymentStatus is a configured deployment plus its recent run history,
 // ready for the monitor UI.
 type DeploymentStatus struct {
-	App        string    `json:"app"`
-	Repo       string    `json:"repo"`
-	Branch     string    `json:"branch"`
-	ServerID   string    `json:"serverId"`
-	URL        string    `json:"url"`
-	Status     string    `json:"status"` // live | idle | failing
-	LastDeploy string    `json:"lastDeploy"`
-	Runs       []RunView `json:"runs"`
+	App        string      `json:"app"`
+	Repo       string      `json:"repo"`
+	Branch     string      `json:"branch"`
+	ServerID   string      `json:"serverId"`
+	URL        string      `json:"url"`
+	Status     string      `json:"status"` // live | idle | failing
+	LastDeploy string      `json:"lastDeploy"`
+	Runs       []RunView   `json:"runs"`
+	Deploys    int         `json:"deploys"`  // total times deployed (from the tracking log)
+	Timeline   []EventView `json:"timeline"` // recent deploys, newest first
 }
 
-// monitorRunLimit caps how many recent runs the monitor shows per deployment.
-const monitorRunLimit = 5
+// monitorRunLimit caps recent runs; monitorEventLimit caps the deploy timeline.
+const (
+	monitorRunLimit   = 5
+	monitorEventLimit = 10
+)
 
 // MonitorService reports deploy history: the configured deployments enriched
 // with their recent GitHub Actions runs, read on the connected user's behalf.
 type MonitorService struct {
 	deployments DeploymentStore
+	events      DeployEventReader
 	tokens      TokenStore
 	runs        WorkflowRunLister
 }
 
 // NewMonitorService wires the service to its ports.
-func NewMonitorService(deployments DeploymentStore, tokens TokenStore, runs WorkflowRunLister) *MonitorService {
-	return &MonitorService{deployments: deployments, tokens: tokens, runs: runs}
+func NewMonitorService(deployments DeploymentStore, events DeployEventReader, tokens TokenStore, runs WorkflowRunLister) *MonitorService {
+	return &MonitorService{deployments: deployments, events: events, tokens: tokens, runs: runs}
 }
 
 // History lists every configured deployment with its recent runs. It returns
@@ -102,14 +126,15 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 	out := make([]DeploymentStatus, 0, len(deployments))
 	for _, d := range deployments {
 		runs, _ := s.runs.ListWorkflowRuns(ctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit) // best-effort
-		out = append(out, buildStatus(d, runs))
+		events, total, _ := s.events.DeployEvents(d.Owner, d.Repo, d.Branch, monitorEventLimit)                    // best-effort
+		out = append(out, buildStatus(d, runs, events, total))
 	}
 	return out, nil
 }
 
 // buildStatus assembles a deployment's UI status from its recent runs (newest
 // first); the latest run sets the headline status and last-deploy time.
-func buildStatus(d Deployment, runs []WorkflowRun) DeploymentStatus {
+func buildStatus(d Deployment, runs []WorkflowRun, events []DeployEvent, deploys int) DeploymentStatus {
 	st := DeploymentStatus{
 		App:        d.App,
 		Repo:       d.Owner + "/" + d.Repo,
@@ -119,6 +144,8 @@ func buildStatus(d Deployment, runs []WorkflowRun) DeploymentStatus {
 		Status:     "idle",
 		LastDeploy: "n/a",
 		Runs:       make([]RunView, 0, len(runs)),
+		Deploys:    deploys,
+		Timeline:   make([]EventView, 0, len(events)),
 	}
 	for i, r := range runs {
 		view := RunView{
@@ -133,6 +160,9 @@ func buildStatus(d Deployment, runs []WorkflowRun) DeploymentStatus {
 			st.Status = deployStatus(view.Status)
 			st.LastDeploy = view.When
 		}
+	}
+	for _, e := range events {
+		st.Timeline = append(st.Timeline, EventView{When: relativeTime(e.At), Environment: e.Environment})
 	}
 	return st
 }
