@@ -35,6 +35,14 @@ export function GithubMark({ className, ...props }: IconProps) {
   );
 }
 
+export function Star({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={14} height={14} fill="currentColor" className={className} {...props}>
+      <path d="M11.48 3.5a.56.56 0 0 1 1.04 0l2.12 5.11a.56.56 0 0 0 .48.35l5.52.44c.5.04.7.66.32.99l-4.2 3.6a.56.56 0 0 0-.18.56l1.28 5.38a.56.56 0 0 1-.84.61l-4.72-2.88a.56.56 0 0 0-.59 0l-4.72 2.88a.56.56 0 0 1-.84-.61l1.28-5.38a.56.56 0 0 0-.18-.56l-4.2-3.6a.56.56 0 0 1 .32-.99l5.52-.44a.56.56 0 0 0 .48-.35z" />
+    </svg>
+  );
+}
+
 export function ChevronDown({ className, ...props }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" width={16} height={16} className={className} {...base} {...props}>
@@ -103,6 +111,17 @@ export function Refresh({ className, ...props }: IconProps) {
       <path d="M20 4v4h-4" />
       <path d="M20 15a8 8 0 0 1-13.6 3.6L4 16" />
       <path d="M4 20v-4h4" />
+    </svg>
+  );
+}
+
+export function Trash({ className, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={14} height={14} className={className} {...base} {...props}>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M6 6l1 14h10l1-14" />
+      <path d="M10 11v6M14 11v6" />
     </svg>
   );
 }

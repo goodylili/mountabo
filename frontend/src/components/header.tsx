@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Book, GithubMark, LogoMark, Logout } from "@/components/icons";
+import { RepoStar } from "@/components/repo-star";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 export type Crumb = { label: string; href?: string; muted?: boolean };
@@ -111,14 +112,8 @@ export function Header({
               <Logout />
             </a>
           </>
-        ) : (
-          <Link
-            href="/connect"
-            className="flex items-center gap-2 rounded-md border border-lime/40 px-3 py-1.5 text-lime transition-colors hover:bg-lime/10"
-          >
-            <GithubMark /> connect github
-          </Link>
-        )}
+        ) : null}
+        <RepoStar />
         <span className="h-4 w-px bg-line" />
         <ThemeToggle />
       </div>
