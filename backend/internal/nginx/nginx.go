@@ -4,9 +4,8 @@
 // the shell script that installs nginx and certbot, writes those configs, obtains
 // a Let's Encrypt certificate over the http-01 challenge, and reloads.
 //
-// It is the nginx-based counterpart to the bundled Caddy option; both terminate
-// TLS for a domain and proxy to a local app port, and both need DNS for the
-// domain already pointing at the server.
+// It terminates TLS for a domain and proxies to a local app port; DNS for the
+// domain must already point at the server for the http-01 challenge to pass.
 package nginx
 
 import (
