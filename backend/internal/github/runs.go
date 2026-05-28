@@ -16,9 +16,26 @@ import (
 const maxJobLogBytes = 2 << 20 // 2 MiB
 
 var (
-	_ usecase.WorkflowRunLister = (*Client)(nil)
-	_ usecase.WorkflowJobLister = (*Client)(nil)
+	_ usecase.WorkflowRunLister  = (*Client)(nil)
+	_ usecase.WorkflowJobLister  = (*Client)(nil)
+	_ usecase.WorkflowDispatcher = (*Client)(nil)
 )
+
+// DispatchWorkflow triggers a workflow_dispatch event for workflowFile on the
+// given ref, so a configure-and-deploy actually runs without waiting for a
+// push. GitHub requires the workflow file to be on the repo's default branch
+// for this to succeed (a known quirk); the caller treats failure as advisory
+// and falls back to telling the operator to push.
+func (c *Client) DispatchWorkflow(ctx context.Context, t usecase.Token, owner, repo, workflowFile, ref string) error {
+	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
+	if err != nil {
+		return fmt.Errorf("build github client: %w", err)
+	}
+	if _, _, err := api.Actions.CreateWorkflowDispatchEventByFileName(ctx, owner, repo, workflowFile, gogithub.CreateWorkflowDispatchEventRequest{Ref: ref}); err != nil {
+		return fmt.Errorf("dispatch %s on %s/%s@%s: %w", workflowFile, owner, repo, ref, err)
+	}
+	return nil
+}
 
 // ListWorkflowRuns returns the most recent runs of workflowFile on branch,
 // newest first. workflowFile is the file name under .github/workflows (e.g.

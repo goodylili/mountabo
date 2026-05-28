@@ -102,6 +102,16 @@ type RepoDeployKeyManager interface {
 	AddDeployKey(ctx context.Context, t Token, owner, repo, title, publicKey string, readOnly bool) (int64, error)
 }
 
+// WorkflowDispatcher triggers the deploy workflow on a branch (workflow_dispatch)
+// so a configure-and-deploy actually runs the deploy without waiting for the
+// next push. Best-effort: dispatch can fail when the workflow file is not yet
+// on the repo's default branch (GitHub requires this for new workflows), in
+// which case the operator pushes or runs the workflow manually. A dispatch
+// failure must not undo the rest of the deploy.
+type WorkflowDispatcher interface {
+	DispatchWorkflow(ctx context.Context, t Token, owner, repo, workflowFile, ref string) error
+}
+
 // DeployKeyInstaller writes a repo's deploy private key onto the server (in the
 // deploy user's ~/.ssh) over SSH, streaming progress to out.
 type DeployKeyInstaller interface {
@@ -124,11 +134,12 @@ type DeployService struct {
 	keys       KeyMaker
 	deployKeys RepoDeployKeyManager
 	installer  DeployKeyInstaller
+	dispatcher WorkflowDispatcher
 }
 
 // NewDeployService wires the service to its ports.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer}
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, dispatcher WorkflowDispatcher) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, dispatcher: dispatcher}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -255,7 +266,17 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		progress(out, "note: deploy succeeded but recording history failed: %v", err)
 	}
 
-	progress(out, "deploy configured, push to %s to trigger a %s deploy", in.Branch, cfg.Strategy)
+	// Trigger the deploy immediately via workflow_dispatch so the operator does
+	// not have to push to see the new config run. Best-effort: GitHub requires
+	// the workflow file to be on the default branch for dispatch to work, which
+	// is not always the case for first deploys to a non-default branch; on
+	// failure we just say "push to trigger" instead.
+	wfFile := fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch)
+	if dispErr := s.dispatcher.DispatchWorkflow(ctx, token, in.Owner, in.Repo, wfFile, in.Branch); dispErr != nil {
+		progress(out, "deploy configured, push to %s to trigger a %s deploy (auto-trigger skipped: %v)", in.Branch, cfg.Strategy, dispErr)
+	} else {
+		progress(out, "deploy configured and triggered, watch the run on %s", in.Branch)
+	}
 	return nil
 }
 

@@ -612,6 +612,13 @@ function ExpandedCard({
   const [owner, repo] = splitRepo(d.repo);
   const live = d.liveUrl ? d.liveUrl.replace(/^https?:\/\//, "") : "";
   const dashboards = installedDashboards(server?.options);
+  const router = useRouter();
+  // New-environment form state: the branch the operator wants to deploy as a
+  // sibling environment. Submitting sends them to the configure page prefilled
+  // with this repo + server + the new branch, where they fill in the
+  // environment's name and variables and click deploy, exactly like the first
+  // environment was created.
+  const [newBranch, setNewBranch] = useState("");
 
   // Per-section open/closed state, remembered for as long as the card stays
   // open. Host metrics and the deploy walkthrough open by default so the most
@@ -619,6 +626,7 @@ function ExpandedCard({
   // the card is scannable, and each toggles independently.
   const [sections, setSections] = useState<Record<string, boolean>>({
     metrics: true,
+    environments: true,
     walkthrough: true,
     runs: false,
     logs: false,
@@ -691,6 +699,63 @@ function ExpandedCard({
             <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
             <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
             <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
+          </div>
+        </CollapsibleSection>
+
+        {/* environments: this deployment is one (branch, environment) pair; the
+            operator can create another one for the same repo from here without
+            going back to the home picker. */}
+        <CollapsibleSection
+          title="environments"
+          hint="deploy this repo on another branch"
+          open={sections.environments}
+          onToggle={() => toggle("environments")}
+        >
+          <div className="space-y-4">
+            <div className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-[13.5px]">
+              <span className="flex items-center gap-3">
+                <span className="h-1.5 w-1.5 rounded-full bg-lime" />
+                <span className="text-cream">{d.branch}</span>
+                <span className="text-muted">on branch {d.branch}</span>
+              </span>
+              <span className="text-[12px] text-muted">current</span>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const b = newBranch.trim();
+                if (!b) return;
+                router.push(
+                  `/configure?repo=${encodeURIComponent(d.repo)}&branch=${encodeURIComponent(b)}&server=${encodeURIComponent(d.serverId)}`,
+                );
+              }}
+              className="rounded-xl border border-dashed border-line bg-surface/40 p-4"
+            >
+              <p className="text-[12px] uppercase tracking-wide text-muted">add another environment</p>
+              <p className="mt-1 text-[13px] leading-6 text-body">
+                pick the branch you want to deploy. on the next page you name the environment and add its
+                variables, then click deploy to ship it.
+              </p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={newBranch}
+                  onChange={(e) => setNewBranch(e.target.value)}
+                  placeholder="branch name, for example production or staging"
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  className="min-w-0 flex-1 rounded-md border border-line bg-bg px-3 py-2 font-mono text-[13px] text-cream placeholder:text-faint focus:border-line-strong focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={newBranch.trim() === ""}
+                  className="shrink-0 rounded-md border border-lime/50 bg-lime/[0.08] px-4 py-2 text-[13px] font-medium text-lime transition-colors hover:bg-lime/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  configure and deploy
+                </button>
+              </div>
+            </form>
           </div>
         </CollapsibleSection>
 
