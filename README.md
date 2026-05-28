@@ -43,7 +43,14 @@ GITHUB_CLIENT_ID=...
 GITHUB_CLIENT_SECRET=...
 MOUNTABO_BACKEND=http://localhost:7778
 MOUNTABO_HTTP_ADDR=127.0.0.1:7778
+
+# Bring your own AI key for the terminal page's AI helper. Without it the
+# terminal still works, but the helper shows a hint to set the key. Grab one
+# at https://console.anthropic.com.
+ANTHROPIC_API_KEY=...
 ```
+
+Mountabo is local first and bring your own key: the AI helper calls Anthropic directly from your backend, so the key never leaves your machine and you pay for your own usage.
 
 ### 3. Start Mountabo
 
