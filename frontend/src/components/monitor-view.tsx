@@ -42,6 +42,7 @@ import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
 import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
+import { getRepoBranches } from "@/lib/branches";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -525,6 +526,15 @@ function ExpandedCard({
   // environment's name and variables and click deploy, exactly like the first
   // environment was created.
   const [newBranch, setNewBranch] = useState("");
+  // Branches fetched from GitHub for this repo, so the picker is a real
+  // dropdown of the operator's branches instead of a free-text field. null
+  // means "not loaded yet"; [] means "loaded but no branches came back" (in
+  // which case the form falls back to a text input).
+  const [branches, setBranches] = useState<string[] | null>(null);
+
+  // Fetch branches once the environments tab is first opened. setState only
+  // runs once the fetch resolves (never synchronously in the effect body),
+  // matching the codebase's react-hooks/set-state-in-effect rule.
 
   // Custom domains are scoped to this environment: only the domains pointing
   // at this deployment's port show on the card, and the add form pre-fills
@@ -570,6 +580,23 @@ function ExpandedCard({
   // controls (current branch + add another) which is the highest-value view
   // when opening the card. Other tabs are one click away.
   const [tab, setTab] = useState<TabKey>("environments");
+
+  // Pull GitHub branches lazily, once the environments tab is in view, so the
+  // picker shows real branches the operator can pick from. setState is only
+  // called inside the resolved callback, never synchronously in the effect.
+  useEffect(() => {
+    if (tab !== "environments" || branches !== null) return;
+    const ctrl = new AbortController();
+    getRepoBranches(owner, repo, ctrl.signal).then((list) => {
+      if (!ctrl.signal.aborted) setBranches(list);
+    });
+    return () => ctrl.abort();
+  }, [tab, branches, owner, repo]);
+
+  // Branches the operator can pick from: everything except the current one
+  // (re-deploying the same branch creates a duplicate environment, not a new
+  // one). When no branches loaded yet we fall back to a text input.
+  const otherBranches = (branches ?? []).filter((b) => b !== d.branch);
 
   return (
     <div className="border-t border-line px-6 py-8 sm:px-8">
@@ -689,25 +716,46 @@ function ExpandedCard({
             >
               <p className="text-[12px] uppercase tracking-wide text-muted">add another environment</p>
               <p className="mt-1 text-[13px] leading-6 text-body">
-                pick the branch you want to deploy. on the next page you name the environment and add its
-                variables, then click deploy to ship it.
+                pick a branch from this repo. on the next page you name the environment, add its
+                variables, and set up its custom domain, then click deploy to ship it.
               </p>
               <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <input
-                  value={newBranch}
-                  onChange={(e) => setNewBranch(e.target.value)}
-                  placeholder="branch name, for example production or staging"
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  className="min-w-0 flex-1 rounded-md border border-line bg-bg px-3 py-2 font-mono text-[13px] text-cream placeholder:text-faint focus:border-line-strong focus:outline-none"
-                />
+                {otherBranches.length > 0 ? (
+                  <select
+                    value={newBranch}
+                    onChange={(e) => setNewBranch(e.target.value)}
+                    className="min-w-0 flex-1 rounded-md border border-line bg-bg px-3 py-2 font-mono text-[13px] text-cream focus:border-line-strong focus:outline-none"
+                  >
+                    <option value="" className="text-faint">
+                      pick a branch from github,
+                    </option>
+                    {otherBranches.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={newBranch}
+                    onChange={(e) => setNewBranch(e.target.value)}
+                    placeholder={
+                      branches === null
+                        ? "reading branches from github,"
+                        : "branch name, for example production or staging"
+                    }
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    className="min-w-0 flex-1 rounded-md border border-line bg-bg px-3 py-2 font-mono text-[13px] text-cream placeholder:text-faint focus:border-line-strong focus:outline-none"
+                  />
+                )}
                 <button
                   type="submit"
                   disabled={newBranch.trim() === ""}
                   className="shrink-0 rounded-md border border-lime/50 bg-lime/[0.08] px-4 py-2 text-[13px] font-medium text-lime transition-colors hover:bg-lime/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  configure and deploy
+                  configure environment and domains
                 </button>
               </div>
             </form>

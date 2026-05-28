@@ -21,13 +21,37 @@ type GitHubHandler struct {
 	tree       *usecase.TreeService
 	envExample *usecase.EnvExampleService
 	runSteps   *usecase.RunStepsService
+	branches   *usecase.BranchesService
 	log        *slog.Logger
 }
 
 // NewGitHubHandler wires the handler to the connector, the repo-tree service,
-// the env-example service, the run-steps service, and a logger.
-func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, envExample *usecase.EnvExampleService, runSteps *usecase.RunStepsService, log *slog.Logger) *GitHubHandler {
-	return &GitHubHandler{connector: connector, tree: tree, envExample: envExample, runSteps: runSteps, log: log}
+// the env-example service, the run-steps service, the branches service, and a
+// logger.
+func NewGitHubHandler(connector *usecase.GitHubConnector, tree *usecase.TreeService, envExample *usecase.EnvExampleService, runSteps *usecase.RunStepsService, branches *usecase.BranchesService, log *slog.Logger) *GitHubHandler {
+	return &GitHubHandler{connector: connector, tree: tree, envExample: envExample, runSteps: runSteps, branches: branches, log: log}
+}
+
+// Branches lists every branch on owner/repo so the new-environment picker can
+// present the real branch list instead of a free-text field. owner and repo
+// are required; not-connected is reported as 401.
+func (h *GitHubHandler) Branches(w nethttp.ResponseWriter, r *nethttp.Request) {
+	owner, repo := r.PathValue("owner"), r.PathValue("repo")
+	if owner == "" || repo == "" {
+		h.writeError(w, nethttp.StatusBadRequest, "missing owner or repo")
+		return
+	}
+	names, err := h.branches.List(r.Context(), owner, repo)
+	if errors.Is(err, usecase.ErrNotConnected) {
+		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
+		return
+	}
+	if err != nil {
+		h.log.Error("list branches failed", "owner", owner, "repo", repo, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not list repository branches")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, map[string][]string{"branches": names})
 }
 
 type exchangeRequest struct {

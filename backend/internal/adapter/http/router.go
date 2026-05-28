@@ -39,6 +39,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("GET /api/github/tree", gh.Tree)
 	mux.HandleFunc("GET /api/github/env-example", gh.EnvExample)
 	mux.HandleFunc("GET /api/github/run-steps", gh.RunSteps)
+	mux.HandleFunc("GET /api/repos/{owner}/{repo}/branches", gh.Branches)
 	mux.HandleFunc("GET /api/github/job-logs", gh.JobLogs)
 	mux.HandleFunc("DELETE /api/github/token", gh.Disconnect)
 

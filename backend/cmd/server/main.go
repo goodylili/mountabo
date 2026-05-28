@@ -61,7 +61,11 @@ func run() error {
 	// Run-step progress: read the latest deploy run's jobs + steps so the UI can
 	// show each GitHub Actions step's live status, with the same keychain token.
 	runStepsSvc := usecase.NewRunStepsService(keyStore, ghClient)
-	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, envExampleSvc, runStepsSvc, logger)
+	// Branches lister: the new-environment picker on the deployment card reads
+	// this so the operator chooses from the repo's real branches instead of
+	// typing a name.
+	branchesSvc := usecase.NewBranchesService(keyStore, ghClient)
+	githubHandler := httpadapter.NewGitHubHandler(connector, treeSvc, envExampleSvc, runStepsSvc, branchesSvc, logger)
 
 	// Compose the server flow: SSH probe + bootstrap + key generation (all ssh),
 	// JSON-file persistence, and keychain secrets. One ssh.Client serves probe,
