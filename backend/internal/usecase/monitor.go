@@ -50,10 +50,13 @@ type DeploymentDeleter interface {
 
 // ContainerTeardown stops and removes an app's running container(s) on a server
 // over SSH (both a docker compose stack and a plain container named after the
-// app), so the app stops existing. It is best-effort: docker missing on the box
+// app), so the app stops existing. Branch is passed so the teardown also
+// catches legacy containers labelled with compose's default project name (the
+// deploy directory basename, which equalled the branch on older deploys before
+// the project name was pinned). It is best-effort: docker missing on the box
 // or no matching container is not an error.
 type ContainerTeardown interface {
-	RemoveApp(ctx context.Context, t SSHTarget, app string) error
+	RemoveApp(ctx context.Context, t SSHTarget, app, branch string) error
 }
 
 // RepoFileDeleter removes a single file from a repo branch via the contents
@@ -253,7 +256,7 @@ func (s *MonitorService) removeContainer(ctx context.Context, dep Deployment) {
 		return
 	}
 	t := SSHTarget{Host: server.IP, Port: server.SSHPort, User: BootstrapUser, PrivateKey: key, Fingerprint: server.Fingerprint}
-	if err := s.teardown.RemoveApp(ctx, t, dep.App); err != nil {
+	if err := s.teardown.RemoveApp(ctx, t, dep.App, dep.Branch); err != nil {
 		s.log.Warn("teardown: remove app container failed", "app", dep.App, "serverId", dep.ServerID, "err", err)
 	}
 }

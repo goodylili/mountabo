@@ -14,9 +14,18 @@ import type { ServerView } from "@/lib/servers";
 // One line in the console transcript: a command the operator ran (echoed back
 // with a prompt) or the output and exit status it produced.
 type Entry =
-  | { kind: "command"; text: string; promptHost: string }
+  | { kind: "command"; text: string; promptHost: string; promptPath: string }
   | { kind: "output"; text: string; exitCode: number; truncated: boolean }
   | { kind: "error"; text: string };
+
+// prettyCwd shortens an absolute path under the mountabo user's home to ~/...
+// so the prompt reads like a tuned shell instead of a verbose absolute path.
+function prettyCwd(p: string): string {
+  if (!p) return "~";
+  if (p === "/home/mountabo") return "~";
+  if (p.startsWith("/home/mountabo/")) return "~" + p.slice("/home/mountabo".length);
+  return p;
+}
 
 // TerminalConsole is the terminal page, dressed up to look and feel like the
 // macOS Terminal app: a window with three traffic light dots and a centered
@@ -35,6 +44,10 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
   const [command, setCommand] = useState("");
   const [entries, setEntries] = useState<Entry[]>([]);
   const [running, setRunning] = useState(false);
+  // Working directory the shell ended in after the last command, threaded back
+  // to the next call so `cd` and relative paths feel persistent across
+  // separate SSH sessions. Empty means start in the user's home.
+  const [cwd, setCwd] = useState<string>("");
   // The command queued behind the confirmation gate, or null when the gate is
   // closed. Nothing runs until the operator confirms here.
   const [pending, setPending] = useState<string | null>(null);
@@ -81,11 +94,16 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
   async function execute(cmd: string) {
     if (!cmd || !serverId) return;
     setRunning(true);
-    setEntries((prev) => [...prev, { kind: "command", text: cmd, promptHost: host }]);
+    const pathAtRun = prettyCwd(cwd);
+    setEntries((prev) => [
+      ...prev,
+      { kind: "command", text: cmd, promptHost: host, promptPath: pathAtRun },
+    ]);
     setCommand("");
     scrollToEnd();
     try {
-      const result: ExecResult = await runCommand(serverId, cmd);
+      const result: ExecResult = await runCommand(serverId, cmd, cwd);
+      if (result.cwd) setCwd(result.cwd);
       setEntries((prev) => [
         ...prev,
         {
@@ -124,7 +142,16 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
       </p>
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <ServerSelect servers={ready} value={serverId} onChange={setServerId} />
+        <ServerSelect
+          servers={ready}
+          value={serverId}
+          onChange={(id) => {
+            setServerId(id);
+            // Switching servers should not carry the old server's cwd over,
+            // since the path may not exist (or mean something different) there.
+            setCwd("");
+          }}
+        />
         {selected && (
           <span className="text-[12px] text-muted">
             connected as <span className="text-cream">mountabo</span> on {selected.ip}
@@ -153,6 +180,7 @@ export function TerminalConsole({ servers }: { servers: ServerView[] }) {
         transcriptRef={transcriptRef}
         inputRef={inputRef}
         host={host}
+        path={prettyCwd(cwd)}
         command={command}
         onCommandChange={setCommand}
         onSubmit={ask}
@@ -194,6 +222,7 @@ function TerminalWindow({
   transcriptRef,
   inputRef,
   host,
+  path,
   command,
   onCommandChange,
   onSubmit,
@@ -205,6 +234,7 @@ function TerminalWindow({
   transcriptRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLInputElement | null>;
   host: string;
+  path: string;
   command: string;
   onCommandChange: (v: string) => void;
   onSubmit: () => void;
@@ -258,7 +288,7 @@ function TerminalWindow({
             }}
             className="flex items-baseline gap-2"
           >
-            <PromptSigil host={host} />
+            <PromptSigil host={host} path={path} />
             <input
               ref={inputRef}
               value={command}
@@ -283,13 +313,14 @@ function TerminalWindow({
   );
 }
 
-// PromptSigil renders the shell prompt prefix, e.g. "mountabo@web1 ~ %", with the
-// host tinted lime and the path muted, the way a tuned shell prompt reads.
-function PromptSigil({ host }: { host: string }) {
+// PromptSigil renders the shell prompt prefix, e.g. "mountabo@web1 ~/apps %",
+// with the host tinted lime, the path blue, and the trailing % muted, the way
+// a tuned shell prompt reads. Path defaults to ~ so the prompt is never blank.
+function PromptSigil({ host, path }: { host: string; path?: string }) {
   return (
     <span className="shrink-0 select-none font-mono text-[13.5px]">
       <span className="text-lime">{host}</span>
-      <span className="text-blue"> ~ </span>
+      <span className="text-blue"> {path && path !== "" ? path : "~"} </span>
       <span className="text-muted">%</span>
     </span>
   );
@@ -299,7 +330,7 @@ function TranscriptEntry({ entry }: { entry: Entry }) {
   if (entry.kind === "command") {
     return (
       <div className="flex items-baseline gap-2 break-words">
-        <PromptSigil host={entry.promptHost} />
+        <PromptSigil host={entry.promptHost} path={entry.promptPath} />
         <span className="text-cream">{entry.text}</span>
       </div>
     );

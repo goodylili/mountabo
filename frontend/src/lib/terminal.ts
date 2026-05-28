@@ -9,6 +9,9 @@ export type ExecResult = {
   exitCode: number;
   // True when the command produced more output than the captured cap.
   truncated: boolean;
+  // Working directory the shell ended in; pass it back as the next command's
+  // cwd so `cd` and relative paths feel persistent across calls.
+  cwd: string;
 };
 
 // Result of asking the AI helper for a command suggestion. configured is false
@@ -20,15 +23,18 @@ export type AICommandResult = {
   explanation: string;
 };
 
-// runCommand sends a single command to the server and returns its output and
-// exit code. A non-zero exit code is a normal result, not an error: the command
-// ran and the server answered. It throws only when the request itself fails
-// (backend unreachable, server not set up, etc.) with a readable message.
-export async function runCommand(serverId: string, command: string): Promise<ExecResult> {
+// runCommand sends a single command to the server and returns its output, exit
+// code, and the working directory the shell ended in. cwd, when given, is the
+// directory the command starts in, so `cd /opt` followed by `pwd` reports /opt
+// even though each call opens a new SSH session. A non-zero exit code is a
+// normal result, not an error: the command ran and the server answered. It
+// throws only when the request itself fails (backend unreachable, server not
+// set up, etc.) with a readable message.
+export async function runCommand(serverId: string, command: string, cwd?: string): Promise<ExecResult> {
   const resp = await fetch(`/api/terminal/${serverId}/exec`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ command }),
+    body: JSON.stringify({ command, cwd: cwd ?? "" }),
   });
   if (!resp.ok) {
     const msg = await errorMessage(resp);

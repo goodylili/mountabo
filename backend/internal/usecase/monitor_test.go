@@ -31,7 +31,7 @@ type fakeContainerTeardown struct {
 	err     error
 }
 
-func (f *fakeContainerTeardown) RemoveApp(_ context.Context, _ SSHTarget, app string) error {
+func (f *fakeContainerTeardown) RemoveApp(_ context.Context, _ SSHTarget, app, _ string) error {
 	f.removed = append(f.removed, app)
 	return f.err
 }

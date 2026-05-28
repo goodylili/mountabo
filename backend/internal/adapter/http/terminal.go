@@ -27,6 +27,10 @@ func NewTerminalHandler(exec *usecase.ServerExecService, ai *usecase.AICommandSe
 
 type execRequest struct {
 	Command string `json:"command"`
+	// Cwd is the working directory the previous command ended in; passing it
+	// makes the next command resume there, so `cd` (and relative paths) feel
+	// persistent across calls. Empty means start in the user's home.
+	Cwd string `json:"cwd"`
 }
 
 // Exec runs a single operator-supplied command on the chosen server over SSH and
@@ -45,7 +49,7 @@ func (h *TerminalHandler) Exec(w nethttp.ResponseWriter, r *nethttp.Request) {
 		return
 	}
 
-	result, err := h.exec.Exec(r.Context(), id, req.Command)
+	result, err := h.exec.Exec(r.Context(), id, req.Command, req.Cwd)
 	if errors.Is(err, usecase.ErrServerNotFound) {
 		h.writeError(w, nethttp.StatusNotFound, "server not found")
 		return

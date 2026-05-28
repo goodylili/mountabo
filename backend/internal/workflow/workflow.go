@@ -280,6 +280,11 @@ func composeScript(c Config) string {
 	b.WriteString(clonePull)
 	b.WriteString("\n\n")
 	b.WriteString(cdRoot(c))
+	// Pin the compose project name so each (app, branch) deploy owns a stable,
+	// known set of containers (compose otherwise defaults the project name to
+	// the deploy directory basename, which makes the delete teardown unable to
+	// find the containers by app name).
+	fmt.Fprintf(&b, "export COMPOSE_PROJECT_NAME='%s-%s'\n\n", c.App, c.Branch)
 	b.WriteString("# Write .env (ports + your environment variables) for docker compose.\ncat > .env <<EOF\n")
 	b.WriteString(envFileBody(c, true))
 	b.WriteString("\nEOF\n\n")
