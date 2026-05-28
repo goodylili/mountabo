@@ -1,35 +1,35 @@
 import { redirect } from "next/navigation";
 import { Header } from "@/components/header";
 import { ConfigureView } from "@/components/configure-view";
-import { getRepos } from "@/lib/repos";
+import type { Source } from "@/lib/data";
 import { getServers, toDisplayServer } from "@/lib/servers";
 import { getGithubConnection } from "@/lib/session";
 
 export default async function ConfigurePage({
   searchParams,
 }: {
-  searchParams: Promise<{ repo?: string; server?: string }>;
+  searchParams: Promise<{ repo?: string; branch?: string; server?: string }>;
 }) {
-  const { repo, server: serverId } = await searchParams;
+  const { repo, branch: branchParam, server: serverId } = await searchParams;
   const conn = await getGithubConnection();
   const account = conn.connected ? conn.login : null;
 
-  // The deployment page needs a connected account, a real repo, and a real
-  // (set-up) server. Resolve repos + servers concurrently; bail home if any of
-  // the three can't be resolved.
-  const [sources, servers] = await Promise.all([
-    account ? getRepos() : Promise.resolve([]),
-    getServers(),
-  ]);
-
-  const source = sources.find((s) => `${s.owner}/${s.name}` === repo);
+  // The repo + branch arrive in the URL from the picker (which already has them
+  // loaded), so this page does not refetch the full repo listing, by far the
+  // slowest call in the app, just to resolve one already-selected repo. Only
+  // the server list is needed here, and it is a fast local read.
+  const servers = await getServers();
+  const slash = repo?.indexOf("/") ?? -1;
+  const owner = repo && slash > 0 ? repo.slice(0, slash) : "";
+  const name = repo && slash > 0 ? repo.slice(slash + 1) : "";
+  const branch = branchParam ?? "";
   const real = servers.find((s) => s.id === serverId);
-  if (!account || !source || !real) {
+  if (!account || !owner || !name || !branch || !real) {
     redirect("/");
   }
 
   const server = toDisplayServer(real);
-  const branch = source.branch;
+  const source: Source = { owner, name, branch, updated: "", language: "" };
 
   return (
     <div className="flex min-h-screen flex-col">

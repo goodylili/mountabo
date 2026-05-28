@@ -283,12 +283,16 @@ export function NewDeployment({
         searchRef.current?.focus();
       }
       if (e.key === "Enter" && source && server && document.activeElement !== searchRef.current) {
-        router.push(`/configure?repo=${encodeURIComponent(source)}&server=${server}`);
+        const picked = sources.find((s) => `${s.owner}/${s.name}` === source);
+        const branch = picked?.branch ?? "";
+        router.push(
+          `/configure?repo=${encodeURIComponent(source)}&branch=${encodeURIComponent(branch)}&server=${server}`,
+        );
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [source, server, router]);
+  }, [source, server, sources, router]);
 
   const q = query.trim().toLowerCase();
   // Distinct repo owners (account + organizations) for the owner dropdown.
@@ -318,8 +322,15 @@ export function NewDeployment({
 
   const readyServers = serverList.filter((s) => s.status === "ready");
   const ready = Boolean(source && server);
+  // Branch comes from the picked source so the configure page does not need to
+  // fetch the full repo listing again just to find it. Without it the configure
+  // page would hit the slowest call in the app on every navigation.
+  const pickedBranch = useMemo(
+    () => sources.find((s) => `${s.owner}/${s.name}` === source)?.branch ?? "",
+    [sources, source],
+  );
   const configureHref = ready
-    ? `/configure?repo=${encodeURIComponent(source as string)}&server=${server}`
+    ? `/configure?repo=${encodeURIComponent(source as string)}&branch=${encodeURIComponent(pickedBranch)}&server=${server}`
     : "#";
 
   return (
