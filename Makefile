@@ -1,8 +1,8 @@
-.PHONY: go backend frontend deps
+.PHONY: mountabo backend frontend deps
 
 # Start the whole project: backend + frontend together.
 # Ctrl-C stops both.
-go:
+mountabo:
 	@echo "starting mountabo (backend + frontend)..."
 	@trap 'kill 0' EXIT INT TERM; \
 	$(MAKE) backend & \

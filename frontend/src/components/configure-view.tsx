@@ -150,6 +150,16 @@ export function ConfigureView({
   // live deploy stream is shown. Stable so the stream runs exactly once.
   const [deployBody, setDeployBody] = useState<PreviewRequest | null>(null);
   const [deployed, setDeployed] = useState(false);
+  // Optional custom domain captured on this same page (Vercel-style: one place
+  // for env vars + domain setup). When the operator fills it in, mountabo
+  // applies it via the same SSE add-domain flow right after the deploy stream
+  // finishes successfully. The port is taken from the first configured port,
+  // so the operator never picks it twice.
+  const [domainHost, setDomainHost] = useState("");
+  const [domainWww, setDomainWww] = useState(true);
+  // Chained domain stream: set after a successful deploy when domainHost is
+  // non-empty, which triggers a second StreamLog. null otherwise.
+  const [domainStream, setDomainStream] = useState<{ host: string; upstream: string; aliases: string[] } | null>(null);
   // Set when the operator clicks deploy: opens the confirmation gate first. The
   // deploy only runs (deployBody is set) once they confirm, so nothing reaches
   // the repository or server unseen.
@@ -455,6 +465,38 @@ export function ConfigureView({
           </div>
         </Section>
 
+        {/* Optional custom domain captured here so env + domain setup live on
+            one page. Applied via the same nginx + Let's Encrypt flow right
+            after the deploy stream finishes; nothing runs until then. */}
+        <Section label="custom domain (optional)" hint="nginx + free https on this server">
+          <p className="mb-3 text-[12px] leading-5 text-muted">
+            point your domain&apos;s A record at <span className="text-cream">{server.ip}</span> first.
+            after the deploy stream finishes, mountabo fronts your app on https with a Let&apos;s Encrypt
+            certificate.
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              value={domainHost}
+              onChange={(e) => setDomainHost(e.target.value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""))}
+              placeholder="app.example.com"
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              className={inputCls}
+            />
+            <label className={`flex shrink-0 cursor-pointer items-center gap-2 text-[12px] text-body ${domainHost.split(".").length === 2 ? "" : "opacity-40"}`}>
+              <input
+                type="checkbox"
+                checked={domainWww && domainHost.split(".").length === 2}
+                disabled={domainHost.split(".").length !== 2}
+                onChange={(e) => setDomainWww(e.target.checked)}
+                className="h-4 w-4 accent-lime"
+              />
+              also serve www.
+            </label>
+          </div>
+        </Section>
+
         {/* CTA: commit the workflow + deploy.sh and set the secrets, streamed live. */}
         <div className="mt-8">
           <button
@@ -522,9 +564,41 @@ export function ConfigureView({
           onDone={(ok) => {
             if (!ok) return;
             setDeployed(true);
-            // On a successful configure-and-deploy, send the operator to the
-            // deployments page focused on this app, where they can watch the
-            // GitHub Actions run finish and open the live link once it is up.
+            const host = domainHost.trim();
+            // If the operator filled in a custom domain, chain the add-domain
+            // stream right after deploy succeeds. The upstream port is the
+            // first configured port; aliases include www. only for an apex
+            // domain (one dot). Navigation happens after the domain stream
+            // completes so the operator sees both timelines.
+            const upstream = configuredPorts[0]?.value?.trim() || "";
+            if (host !== "" && upstream !== "") {
+              setDomainStream({
+                host,
+                upstream,
+                aliases: domainWww && host.split(".").length === 2 ? [`www.${host}`] : [],
+              });
+              return;
+            }
+            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}`);
+          }}
+        />
+      )}
+
+      {domainStream && (
+        <StreamLog
+          title={`adding ${domainStream.host}`}
+          subtitle={`${server.name} (${server.ip})`}
+          url={(() => {
+            const qs = new URLSearchParams();
+            qs.set("host", domainStream.host);
+            qs.set("upstream", domainStream.upstream);
+            if (domainStream.aliases.length) qs.set("aliases", domainStream.aliases.join(","));
+            return `/api/servers/${server.id}/domains/add?${qs.toString()}`;
+          })()}
+          onClose={() => setDomainStream(null)}
+          onDone={() => {
+            // Always navigate to /deployments after the domain stream resolves,
+            // success or not, so the operator can see the live state of both.
             router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}`);
           }}
         />

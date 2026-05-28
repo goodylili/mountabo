@@ -48,7 +48,7 @@ MOUNTABO_HTTP_ADDR=127.0.0.1:7778
 ### 3. Start Mountabo
 
 ```bash
-make go
+make mountabo
 ```
 
 Then open [http://localhost:4321](http://localhost:4321).
