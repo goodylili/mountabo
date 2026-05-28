@@ -9,9 +9,29 @@ import (
 )
 
 var (
-	_ usecase.EnvManager      = (*Client)(nil)
-	_ usecase.EnvSecretSetter = (*Client)(nil)
+	_ usecase.EnvManager             = (*Client)(nil)
+	_ usecase.EnvSecretSetter        = (*Client)(nil)
+	_ usecase.RepoEnvironmentDeleter = (*Client)(nil)
 )
+
+// DeleteEnvironment removes a deployment environment (and the secrets scoped to
+// it, GitHub drops them together) from owner/repo. A 404 means the environment
+// is already gone, which is a no-op success: the teardown wants the end state
+// "no such environment", not a hard failure when it never existed.
+func (c *Client) DeleteEnvironment(ctx context.Context, t usecase.Token, owner, repo, name string) error {
+	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
+	if err != nil {
+		return fmt.Errorf("build github client: %w", err)
+	}
+	resp, err := api.Repositories.DeleteEnvironment(ctx, owner, repo, name)
+	if err != nil {
+		if resp != nil && resp.StatusCode == 404 {
+			return nil
+		}
+		return fmt.Errorf("delete environment %q on %s/%s: %w", name, owner, repo, err)
+	}
+	return nil
+}
 
 // EnsureEnvironment creates the named deployment environment on owner/repo, or
 // leaves it as-is if it already exists (the API is upsert). No protection rules

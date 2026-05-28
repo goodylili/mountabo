@@ -59,6 +59,22 @@ type ContainerTeardown interface {
 	RemoveApp(ctx context.Context, t SSHTarget, app, branch string) error
 }
 
+// RepoEnvironmentDeleter removes a GitHub deployment environment (and the
+// secrets scoped to it, which GitHub drops together) from a repo. An already
+// gone environment is a no-op success, so the teardown does not fail when the
+// environment was never created or has been removed manually.
+type RepoEnvironmentDeleter interface {
+	DeleteEnvironment(ctx context.Context, t Token, owner, repo, name string) error
+}
+
+// RepoKeyDeleter removes mountabo's deploy keys from a repo. It matches keys by
+// title prefix so it only removes the ones mountabo added (the title carries a
+// "mountabo deploy" prefix); keys the operator created for other tools are
+// untouched. No matching key is a no-op success.
+type RepoKeyDeleter interface {
+	DeleteDeployKey(ctx context.Context, t Token, owner, repo, titlePrefix string) error
+}
+
 // RepoFileDeleter removes a single file from a repo branch via the contents
 // API. A file that is already gone is treated as a no-op success, so tearing
 // down a deployment never fails on an already-removed file.
@@ -165,19 +181,25 @@ type MonitorService struct {
 	vault       SecretVault
 	teardown    ContainerTeardown
 	repoFiles   RepoFileDeleter
+	repoEnvs    RepoEnvironmentDeleter
+	repoKeys    RepoKeyDeleter
 	log         *slog.Logger
 }
 
 // NewMonitorService wires the service to its ports. The server store is read to
 // derive each deployment's live app URL (its domain, or its IP) and to reach the
-// server on teardown; the vault holds the per-server key used to SSH in; the
-// teardown and repoFiles ports stop the container and remove the committed
-// workflow when a deployment is deleted; the deleter then forgets its tracking.
-func NewMonitorService(deployments DeploymentStore, events DeployEventReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, log *slog.Logger) *MonitorService {
+// server on teardown; the vault holds the per-server key used to SSH in and is
+// also used to clear the stored deploy key when the deployment is removed; the
+// teardown stops the container; repoFiles removes the committed workflow and
+// deploy script; repoEnvs removes the GitHub deployment environment (and its
+// scoped secrets); repoKeys removes the deploy key mountabo added to the repo.
+// Together they undo everything the deploy created on GitHub. The deleter then
+// forgets mountabo's tracking.
+func NewMonitorService(deployments DeploymentStore, events DeployEventReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, log *slog.Logger) *MonitorService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &MonitorService{deployments: deployments, events: events, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, log: log}
+	return &MonitorService{deployments: deployments, events: events, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, log: log}
 }
 
 // Delete tears a deployment down by its app name: it stops and removes the app's
@@ -235,6 +257,45 @@ func (s *MonitorService) lookup(app string) (Deployment, bool, error) {
 func (s *MonitorService) tearDown(ctx context.Context, dep Deployment) {
 	s.removeContainer(ctx, dep)
 	s.removeWorkflowFiles(ctx, dep)
+	s.removeEnvironment(ctx, dep)
+	s.removeDeployKey(ctx, dep)
+}
+
+// removeEnvironment deletes the GitHub deployment environment mountabo created
+// for this deployment, which also drops the encrypted secrets scoped to it
+// (SERVER_HOST/USER/SSH_KEY/DEPLOY_DIR and the operator's variables). Skipped
+// (with a log) when no token is stored or the deployment has no environment
+// recorded.
+func (s *MonitorService) removeEnvironment(ctx context.Context, dep Deployment) {
+	if dep.Environment == "" {
+		return
+	}
+	token, err := s.tokens.Load()
+	if err != nil {
+		s.log.Warn("teardown: skip environment removal, github token unavailable", "app", dep.App, "err", err)
+		return
+	}
+	if err := s.repoEnvs.DeleteEnvironment(ctx, token, dep.Owner, dep.Repo, dep.Environment); err != nil {
+		s.log.Warn("teardown: delete deployment environment failed", "app", dep.App, "repo", dep.Owner+"/"+dep.Repo, "env", dep.Environment, "err", err)
+	}
+}
+
+// removeDeployKey removes mountabo's read-only deploy keys from the repo (by
+// title prefix) and clears the matching private key from the local vault so the
+// stored secret does not outlive the GitHub side. Skipped (with a log) when no
+// token is stored. Vault clearing is best-effort: a missing entry is fine.
+func (s *MonitorService) removeDeployKey(ctx context.Context, dep Deployment) {
+	token, err := s.tokens.Load()
+	if err != nil {
+		s.log.Warn("teardown: skip deploy key removal, github token unavailable", "app", dep.App, "err", err)
+		return
+	}
+	if err := s.repoKeys.DeleteDeployKey(ctx, token, dep.Owner, dep.Repo, "mountabo deploy"); err != nil {
+		s.log.Warn("teardown: delete deploy key failed", "app", dep.App, "repo", dep.Owner+"/"+dep.Repo, "err", err)
+	}
+	if err := s.vault.DeleteSecret(deployKeyVaultKey(dep.Owner, dep.Repo)); err != nil {
+		s.log.Warn("teardown: clear stored deploy key failed", "app", dep.App, "repo", dep.Owner+"/"+dep.Repo, "err", err)
+	}
 }
 
 // removeContainer SSHes into the deployment's server as the mountabo user and

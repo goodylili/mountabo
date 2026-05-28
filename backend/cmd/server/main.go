@@ -106,7 +106,7 @@ func run() error {
 	// on its server (keychain key), github removes the committed deploy workflow +
 	// deploy.sh from the repo (keychain token), and the SQLite store then forgets
 	// its tracking. Teardown is best-effort and logged.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, deploymentStore, keyStore, ghClient, serverStore, keyStore, sshClient, ghClient, logger)
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, deploymentStore, keyStore, ghClient, serverStore, keyStore, sshClient, ghClient, ghClient, ghClient, logger)
 	// App health: probe whether a deployed app is responding by curling it from
 	// its own server over SSH (the same ssh.Client + server store + keychain key
 	// the metrics/logs services use), so the card shows real up/down status.

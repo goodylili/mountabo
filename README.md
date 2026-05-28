@@ -4,18 +4,11 @@ Mountabo helps you deploy your app to your own server.
 
 You run it locally, connect GitHub, add a VPS, and configure a repo once. After that, pushes to your chosen branch deploy through GitHub Actions straight to your server.
 
-## Examples
+## Showcase
 
 ![Repo picker on the home page, with visibility and container filters](docs/screenshots/repos.png)
 
-Mountabo deploys any repository with a `Dockerfile` or a Docker Compose setup, whatever the stack. A few examples you can deploy from the picker:
-
-- [ibc-go](https://github.com/goodylili/ibc-go), Go
-- [pavex_tutorial_examples](https://github.com/goodylili/pavex_tutorial_examples), Rust
-- CosmosAccounts, Makefile (private)
-- derivator, Go (private)
-
-Pick one, choose a server, and deploy.
+Mountabo deploys any repository with a `Dockerfile` or a Docker Compose setup, whatever the stack. Pick one in the picker, choose a server, and deploy.
 
 ## What You Need
 
@@ -133,7 +126,7 @@ Open `/terminal` to get a web shell on any of your set up servers.
 
 ### AI helper
 
-Below the terminal there is an AI helper. Describe what you want in plain English (for example, "I want to know if there are any containers running") and it suggests a shell command with a short explanation. Click `use this command` to fill the terminal above with the suggestion, then review and run it yourself. The helper only suggests; nothing it returns is ever executed automatically.
+Below the terminal there is an AI helper. Describe what you want in plain English (say, "I want to know if there are any containers running") and it suggests a shell command with a short explanation. Click `use this command` to fill the terminal above with the suggestion, then review and run it yourself. The helper only suggests; nothing it returns is ever executed automatically.
 
 To enable the helper, set `ANTHROPIC_API_KEY` in your `.env` to a key from [the Anthropic console](https://console.anthropic.com) and restart the backend. Without it, the terminal still works and the helper shows a hint to set the key.
 
