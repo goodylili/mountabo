@@ -1,0 +1,47 @@
+# Mountabo
+
+> Mountabo is a local-first deploy tool. You run it on your laptop, connect GitHub, register a VPS, and configure a repo once. Pushes to the chosen branch then deploy through a generated GitHub Actions workflow straight to your server. Mountabo only sets up and observes deploys; it does not sit in the request path.
+
+Architecture: Go backend on `127.0.0.1:7778` (hexagonal: `usecase` core, `adapter/http` and `adapter/repository` outer layers) and a Next.js 16 + React 19 + Tailwind v4 frontend on `http://localhost:4321`. A single root `.env` feeds both. Local state lives in the OS keychain and a JSON/SQLite store. The AI helper on `/terminal` calls Anthropic directly with a bring-your-own key.
+
+Hard rules: hexagonal "accept interfaces, return structs"; interfaces live where they are consumed (`usecase`), not where implemented; deploy workflow + `deploy.sh` are generated **only** in Go (`internal/workflow`), the frontend previews and never regenerates; no em/en/minus dashes in UI copy; standard full grammatical English in UI strings; never add `Co-Authored-By: Claude` to commits.
+
+## Docs
+
+- [README](README.md): user-facing setup, GitHub connect, server add, repo configure, deploy, terminal usage
+- [PRD](PRD.md): product intent, user journey, component breakdown, source of truth for *what* Mountabo is meant to do
+- [Contributing guide](CONTRIBUTING.md): how external contributors should work in this repo
+- [License](LICENSE): MIT
+
+## Agent guidance
+
+- [Skills.md](Skills.md): exhaustive AI-agent entry point — layout, conventions, commands, gotchas, skills to invoke
+- [backend/CLAUDE.md](backend/CLAUDE.md): hexagonal rules for the Go backend (load-bearing primitive: accept interfaces, return structs)
+- [frontend/CLAUDE.md](frontend/CLAUDE.md): Next.js 16 has breaking changes vs training data; read `node_modules/next/dist/docs/` before writing frontend code
+- [frontend/AGENTS.md](frontend/AGENTS.md): frontend agent rules referenced by `CLAUDE.md`
+
+## Code
+
+- [backend/cmd/server](backend/cmd/server): composition root; wires concrete structs in `main.go`
+- [backend/internal/usecase](backend/internal/usecase): application core, owns ports
+- [backend/internal/adapter/http](backend/internal/adapter/http): HTTP handlers, router, server
+- [backend/internal/adapter/repository](backend/internal/adapter/repository): persistence adapters
+- [backend/internal/ai](backend/internal/ai): Anthropic helper for the terminal page
+- [backend/internal/workflow](backend/internal/workflow): authoritative generator for the GitHub Actions deploy workflow and `deploy.sh`
+- [backend/internal/nginx](backend/internal/nginx): per-server nginx + Let's Encrypt logic for custom domains
+- [backend/internal/ssh](backend/internal/ssh), [backend/internal/keychain](backend/internal/keychain), [backend/internal/github](backend/internal/github), [backend/internal/docker](backend/internal/docker), [backend/internal/config](backend/internal/config): outer adapters
+- [frontend/src/app](frontend/src/app): App Router pages (`configure`, `connect`, `deployments`, `terminal`) and API handlers under `api/`
+- [frontend/src/components](frontend/src/components): React components (kebab-case `.tsx`)
+- [frontend/src/lib](frontend/src/lib): client/server helpers; one file per feature area
+
+## Commands
+
+- `make mountabo` (root): run backend + frontend together
+- `make backend` / `make frontend` / `make deps` (root)
+- `make build` / `make test` / `make fmt` / `make lint` (from `backend/`)
+- `npm run dev` / `npm run build` / `npm run lint` (from `frontend/`)
+
+## Optional
+
+- [docs/screenshots](docs/screenshots): README assets
+- [skills-lock.json](skills-lock.json): pinned external agent skills (Vercel/Next); do not hand-edit
