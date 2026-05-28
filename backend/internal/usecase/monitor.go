@@ -143,7 +143,11 @@ type DeploymentStatus struct {
 	// LiveURL points at the running app itself: the server's custom domain when
 	// one is configured, otherwise the server's IP and the app's deploy port.
 	// Empty when the app's address cannot be derived.
-	LiveURL    string      `json:"liveUrl"`
+	LiveURL string `json:"liveUrl"`
+	// Port is the deployment's primary published host port, used by the UI to
+	// scope custom domains to this environment (only domains whose upstream
+	// matches show on its card). Zero when no port was configured.
+	Port       int         `json:"port"`
 	ServerID   string      `json:"serverId"`
 	Status     string      `json:"status"` // live | idle | failing
 	LastDeploy string      `json:"lastDeploy"`
@@ -403,6 +407,7 @@ func buildStatus(d Deployment, server Server, runs []WorkflowRun, events []Deplo
 		ServerID:    d.ServerID,
 		WorkflowURL: fmt.Sprintf("https://github.com/%s/%s/actions/workflows/%s", d.Owner, d.Repo, d.WorkflowFile),
 		LiveURL:     liveURL(server),
+		Port:        d.Port,
 		Status:      "idle",
 		LastDeploy:  "n/a",
 		Runs:        make([]RunView, 0, len(runs)),

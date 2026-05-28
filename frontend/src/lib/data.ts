@@ -71,6 +71,10 @@ export type Deployment = {
   // The GitHub Actions workflow file/page that drives the deployment (secondary
   // link, not where the app lives).
   workflowUrl: string;
+  // Primary published port on the server, used to scope custom domains to this
+  // environment (only domains with this upstream are listed on its card). Zero
+  // when no port was configured (a compose stack with no host publish).
+  port: number;
   uptimePct: string;
   lastDeploy: string;
   metrics: { cpu: string; mem: string; ping: string };

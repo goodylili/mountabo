@@ -20,6 +20,7 @@ type DeploymentResponse = {
   serverId: string;
   workflowUrl: string;
   liveUrl: string;
+  port: number;
   status: string;
   lastDeploy: string;
   runs: RunResponse[];
@@ -45,6 +46,7 @@ export async function getDeployments(): Promise<Deployment[]> {
       status: (["live", "idle", "failing"].includes(d.status) ? d.status : "idle") as Deployment["status"],
       liveUrl: d.liveUrl ?? "",
       workflowUrl: d.workflowUrl ?? "",
+      port: typeof d.port === "number" ? d.port : 0,
       uptimePct: "n/a",
       lastDeploy: d.lastDeploy,
       metrics: { cpu: "n/a", mem: "n/a", ping: "n/a" },

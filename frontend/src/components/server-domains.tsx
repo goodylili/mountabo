@@ -20,22 +20,30 @@ const DEFAULT_PORT = "3000";
 // backend's check so the button only lights up for inputs the server accepts.
 const FQDN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-// ServerDomains is the per-server custom-domain panel shown under a selected,
-// ready server, a sibling of ServerOptions. It lists the domains already fronted
-// by nginx + HTTPS and offers a one-field add: type a domain, pick the app port,
-// done. Adding/removing hands off to the parent, which streams the live log.
+// ServerDomains is the per-server custom-domain panel. It lists the domains
+// already fronted by nginx + HTTPS and offers a one-field add: type a domain,
+// pick the app port, done. Adding/removing hands off to the parent, which
+// streams the live log. When the panel is scoped to one environment, the
+// parent can pass filterUpstream (only domains pointing at that port are
+// listed) and defaultPort (the add form pre-fills that port), so each
+// deployment card shows only its own domains and adding one is a single field.
 export function ServerDomains({
   server,
   onAdd,
   onRemove,
+  filterUpstream,
+  defaultPort,
 }: {
   server: ServerView;
   onAdd: (value: DomainFormValue) => void;
   onRemove: (host: string) => void;
+  filterUpstream?: string;
+  defaultPort?: string;
 }) {
-  const domains = server.domains ?? [];
+  const allDomains = server.domains ?? [];
+  const domains = filterUpstream ? allDomains.filter((d) => d.upstream === filterUpstream) : allDomains;
   const [host, setHost] = useState("");
-  const [port, setPort] = useState(DEFAULT_PORT);
+  const [port, setPort] = useState(defaultPort && defaultPort !== "" ? defaultPort : DEFAULT_PORT);
   const [www, setWww] = useState(true);
   const [email, setEmail] = useState("");
   const [staging, setStaging] = useState(false);

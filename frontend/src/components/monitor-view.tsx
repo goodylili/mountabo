@@ -620,22 +620,52 @@ function ExpandedCard({
   // environment was created.
   const [newBranch, setNewBranch] = useState("");
 
-  // Per-section open/closed state, remembered for as long as the card stays
-  // open. Host metrics and the deploy walkthrough open by default so the most
-  // useful read is visible immediately; the heavier panels start collapsed so
-  // the card is scannable, and each toggles independently.
-  const [sections, setSections] = useState<Record<string, boolean>>({
-    metrics: true,
-    environments: true,
-    walkthrough: true,
-    runs: false,
-    logs: false,
-    dashboards: dashboards.length > 0,
-    monitoring: false,
-    domains: false,
-    timeline: false,
-  });
-  const toggle = (key: string) => setSections((s) => ({ ...s, [key]: !s[key] }));
+  // Custom domains are scoped to this environment: only the domains pointing
+  // at this deployment's port show on the card, and the add form pre-fills
+  // that port so adding one is a single field. Pre-computed so the tab bar
+  // can show the count and the panel can render without re-deriving it.
+  const envPort = d.port > 0 ? String(d.port) : undefined;
+  const envDomains = envPort
+    ? (server?.domains ?? []).filter((dm) => dm.upstream === envPort)
+    : (server?.domains ?? []);
+
+  // Tab definitions for the segmented control at the top of the card. Each
+  // tab is one panel; only the active one renders below, which keeps the
+  // card short and scannable. Optional tabs (dashboards, domains, timeline)
+  // appear only when they have something to show, matching the previous
+  // collapsible-section visibility rules.
+  type TabKey =
+    | "environments"
+    | "walkthrough"
+    | "runs"
+    | "logs"
+    | "dashboards"
+    | "monitoring"
+    | "domains"
+    | "timeline";
+
+  const timelineCount = d.timeline?.length ?? 0;
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: "environments", label: "environments" },
+    { key: "walkthrough", label: "deploy walkthrough" },
+    { key: "runs", label: `recent runs (${d.runs.length})` },
+    { key: "logs", label: "container logs" },
+    ...(server && dashboards.length > 0
+      ? [{ key: "dashboards" as const, label: `monitoring dashboards (${dashboards.length})` }]
+      : []),
+    { key: "monitoring", label: "monitoring tools" },
+    ...(server
+      ? [{ key: "domains" as const, label: `custom domains (${envDomains.length})` }]
+      : []),
+    ...(timelineCount > 0
+      ? [{ key: "timeline" as const, label: `deploy timeline (${d.deploys ?? 0})` }]
+      : []),
+  ];
+
+  // Default to "environments" so the operator lands on the per-environment
+  // controls (current branch + add another) which is the highest-value view
+  // when opening the card. Other tabs are one click away.
+  const [tab, setTab] = useState<TabKey>("environments");
 
   return (
     <div className="border-t border-line px-6 py-8 sm:px-8">
@@ -686,31 +716,47 @@ function ExpandedCard({
           The embedded Uptime Kuma dashboard below is the detailed view. */}
       <HealthBanner health={health} />
 
-      <div className="mt-8 space-y-4">
-        {/* host metrics */}
-        <CollapsibleSection
-          title="host metrics"
-          hint="cpu, memory, disk and uptime, read over ssh"
-          open={sections.metrics}
-          onToggle={() => toggle("metrics")}
+      <div className="mt-8 space-y-5">
+        {/* host metrics: small enough to stay above the tab bar so cpu/memory
+            /disk/uptime are visible no matter which tab is active. */}
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
+          <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
+          <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
+          <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
+          <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
+        </div>
+
+        {/* tab bar: Vercel-style segmented control. Only one panel renders at
+            a time, so the card stays short instead of stacking every section. */}
+        <div
+          role="tablist"
+          aria-label="deployment sections"
+          className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-line bg-surface p-1"
         >
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-            <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
-            <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
-            <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
-            <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
-          </div>
-        </CollapsibleSection>
+          {tabs.map((t) => {
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(t.key)}
+                className={`rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+                  active
+                    ? "bg-lime/[0.15] text-lime"
+                    : "text-muted hover:bg-surface-2 hover:text-cream"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
 
         {/* environments: this deployment is one (branch, environment) pair; the
             operator can create another one for the same repo from here without
             going back to the home picker. */}
-        <CollapsibleSection
-          title="environments"
-          hint="deploy this repo on another branch"
-          open={sections.environments}
-          onToggle={() => toggle("environments")}
-        >
+        {tab === "environments" && (
           <div className="space-y-4">
             <div className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-[13.5px]">
               <span className="flex items-center gap-3">
@@ -757,26 +803,16 @@ function ExpandedCard({
               </div>
             </form>
           </div>
-        </CollapsibleSection>
+        )}
 
         {/* step-by-step deploy walkthrough from GitHub Actions */}
-        <CollapsibleSection
-          title="deploy walkthrough"
-          hint="every github actions job and step, with live status"
-          open={sections.walkthrough}
-          onToggle={() => toggle("walkthrough")}
-        >
+        {tab === "walkthrough" && (
           <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
-        </CollapsibleSection>
+        )}
 
         {/* runs list with clickable GitHub links */}
-        <CollapsibleSection
-          title="recent runs"
-          hint={`${d.runs.length} recorded`}
-          open={sections.runs}
-          onToggle={() => toggle("runs")}
-        >
-          {d.runs.length === 0 ? (
+        {tab === "runs" &&
+          (d.runs.length === 0 ? (
             <p className="text-[14px] text-muted">no runs recorded yet.</p>
           ) : (
             <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
@@ -784,38 +820,20 @@ function ExpandedCard({
                 <RunRow key={r.sha} run={r} />
               ))}
             </ul>
-          )}
-        </CollapsibleSection>
+          ))}
 
         {/* logs viewer */}
-        <CollapsibleSection
-          title="container logs"
-          hint="the running containers' recent output, over ssh"
-          open={sections.logs}
-          onToggle={() => toggle("logs")}
-        >
-          <LogsViewer serverId={d.serverId} ready={Boolean(server)} active={sections.logs} />
-        </CollapsibleSection>
+        {tab === "logs" && (
+          <LogsViewer serverId={d.serverId} ready={Boolean(server)} active />
+        )}
 
         {/* monitoring dashboards reached through the ssh tunnel */}
-        {server && dashboards.length > 0 && (
-          <CollapsibleSection
-            title="monitoring dashboards"
-            hint={`${dashboards.length} reachable through the ssh tunnel`}
-            open={sections.dashboards}
-            onToggle={() => toggle("dashboards")}
-          >
-            <DashboardsPanel serverId={server.id} dashboards={dashboards} active={sections.dashboards} />
-          </CollapsibleSection>
+        {tab === "dashboards" && server && dashboards.length > 0 && (
+          <DashboardsPanel serverId={server.id} dashboards={dashboards} active />
         )}
 
         {/* per-tool monitoring install */}
-        <CollapsibleSection
-          title="monitoring tools"
-          hint="install uptime kuma"
-          open={sections.monitoring}
-          onToggle={() => toggle("monitoring")}
-        >
+        {tab === "monitoring" && (
           <MonitoringPanel
             server={server}
             picked={picked}
@@ -823,45 +841,35 @@ function ExpandedCard({
             onApply={onApplyMonitoring}
             optionName={optionName}
           />
-        </CollapsibleSection>
+        )}
 
-        {/* custom domains */}
-        {server && (
-          <CollapsibleSection
-            title="custom domains"
-            hint={`${(server.domains ?? []).length} configured`}
-            open={sections.domains}
-            onToggle={() => toggle("domains")}
-          >
-            <div className="overflow-hidden rounded-xl border border-line bg-surface">
-              <ServerDomains
-                key={`dom:${(server.domains ?? []).map((dm) => dm.host).join(",")}`}
-                server={server}
-                onAdd={(value) => onAddDomain(server, value)}
-                onRemove={(host) => onRemoveDomain(server, host)}
-              />
-            </div>
-          </CollapsibleSection>
+        {/* custom domains, scoped to this environment: only domains pointing at
+            this deployment's port are listed and the add form defaults to it,
+            so each environment manages its own domains from its own card. */}
+        {tab === "domains" && server && (
+          <div className="overflow-hidden rounded-xl border border-line bg-surface">
+            <ServerDomains
+              key={`dom:${envPort ?? "all"}:${envDomains.map((dm) => dm.host).join(",")}`}
+              server={server}
+              onAdd={(value) => onAddDomain(server, value)}
+              onRemove={(host) => onRemoveDomain(server, host)}
+              filterUpstream={envPort}
+              defaultPort={envPort}
+            />
+          </div>
         )}
 
         {/* deploy timeline */}
-        {(d.timeline?.length ?? 0) > 0 && (
-          <CollapsibleSection
-            title="deploy timeline"
-            hint={`${d.deploys ?? 0} total`}
-            open={sections.timeline}
-            onToggle={() => toggle("timeline")}
-          >
-            <ul className="space-y-3 text-[14px]">
-              {(d.timeline ?? []).map((e, i) => (
-                <li key={i} className="flex items-center gap-3">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                  <span className="text-body">configured for {e.environment}</span>
-                  <span className="ml-auto text-muted">{e.when}</span>
-                </li>
-              ))}
-            </ul>
-          </CollapsibleSection>
+        {tab === "timeline" && timelineCount > 0 && (
+          <ul className="space-y-3 text-[14px]">
+            {(d.timeline ?? []).map((e, i) => (
+              <li key={i} className="flex items-center gap-3">
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
+                <span className="text-body">configured for {e.environment}</span>
+                <span className="ml-auto text-muted">{e.when}</span>
+              </li>
+            ))}
+          </ul>
         )}
 
         {/* danger zone: deleting tears the deployment down, so it gets its own
@@ -885,40 +893,6 @@ function ExpandedCard({
         </div>
       </div>
     </div>
-  );
-}
-
-// CollapsibleSection is one independently toggleable block of the open card: a
-// large, legible header with an optional hint and a chevron, and its content
-// revealed below when open. The header is a button so the whole row toggles.
-function CollapsibleSection({
-  title,
-  hint,
-  open,
-  onToggle,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  open: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="overflow-hidden rounded-xl border border-line bg-surface/40">
-      <button
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-surface-2/40"
-      >
-        <ChevronRight className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />
-        <span className="flex-1">
-          <span className="block text-[17px] font-semibold tracking-tight text-cream">{title}</span>
-          {hint && <span className="mt-0.5 block text-[13px] text-muted">{hint}</span>}
-        </span>
-      </button>
-      {open && <div className="px-5 pb-6 pt-1 sm:px-6">{children}</div>}
-    </section>
   );
 }
 
