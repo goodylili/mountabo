@@ -726,31 +726,36 @@ function ExpandedCard({
           <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
         </div>
 
-        {/* tab bar: Vercel-style segmented control. Only one panel renders at
-            a time, so the card stays short instead of stacking every section. */}
-        <div
-          role="tablist"
-          aria-label="deployment sections"
-          className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-line bg-surface p-1"
-        >
-          {tabs.map((t) => {
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(t.key)}
-                className={`rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
-                  active
-                    ? "bg-lime/[0.15] text-lime"
-                    : "text-muted hover:bg-surface-2 hover:text-cream"
-                }`}
-              >
-                {t.label}
-              </button>
-            );
-          })}
+        {/* tab bar: same segmented-control pattern as the home page's
+            VISIBILITY/CONTAINER filter chips. An uppercase label anchors the
+            row, the chips wrap when there isn't room, and only the active
+            panel renders below so the card stays short. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <span className="text-[12px] font-medium uppercase tracking-wide text-muted">section</span>
+          <span
+            role="tablist"
+            aria-label="deployment sections"
+            className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-line bg-surface p-1"
+          >
+            {tabs.map((t) => {
+              const active = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(t.key)}
+                  className={`rounded-md px-3.5 py-1.5 text-[13px] font-medium transition-colors ${
+                    active
+                      ? "bg-lime/15 text-lime"
+                      : "text-muted hover:bg-surface-2 hover:text-cream"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </span>
         </div>
 
         {/* environments: this deployment is one (branch, environment) pair; the
