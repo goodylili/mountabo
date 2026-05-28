@@ -1165,6 +1165,11 @@ function LogsViewer({ serverId, ready, active }: { serverId: string; ready: bool
   const [lines, setLines] = useState<string[] | null>(null);
   // Tracks an in-flight refresh triggered from the button (an event handler).
   const [refreshing, setRefreshing] = useState(false);
+  // The picked service chip: "" = all containers, otherwise the container name
+  // (which on a compose stack is "<project>-<service>-<index>"). One container
+  // per chip in the row above the log body, so the operator can zoom into the
+  // app's own service instead of reading every line a compose stack prints.
+  const [pickedService, setPickedService] = useState<string>("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Read once the section is open (not just the card), so collapsed logs do not
@@ -1190,13 +1195,39 @@ function LogsViewer({ serverId, ready, active }: { serverId: string; ready: bool
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [lines]);
+  }, [lines, pickedService]);
+
+  // Containers found in the log output, in the order they first appear. The
+  // chip row below lets the operator filter to one service's lines (the app's
+  // own output, instead of every container in the compose stack).
+  const containers: string[] = [];
+  if (lines) {
+    for (const line of lines) {
+      if (isLogHeader(line)) {
+        const name = logHeaderName(line);
+        if (!containers.includes(name)) containers.push(name);
+      }
+    }
+  }
+
+  // Filter lines to the picked container's group: include the header itself
+  // plus every line up to the next header. With no pick, show everything.
+  const visibleLines: string[] = [];
+  if (lines) {
+    let inPicked = pickedService === "";
+    for (const line of lines) {
+      if (isLogHeader(line)) {
+        inPicked = pickedService === "" || logHeaderName(line) === pickedService;
+      }
+      if (inPicked) visibleLines.push(line);
+    }
+  }
 
   return (
     <div className="mt-4 overflow-hidden rounded-xl border border-line bg-black/40">
       <div className="flex items-center justify-between border-b border-line px-5 py-3">
         <span className="flex items-center gap-2 text-[12.5px] text-muted">
-          <Terminal className="text-faint" /> running containers · last 200 lines
+          <Terminal className="text-faint" /> {pickedService === "" ? "running containers" : pickedService} · last 200 lines
         </span>
         <button
           onClick={() => void refresh()}
@@ -1206,6 +1237,39 @@ function LogsViewer({ serverId, ready, active }: { serverId: string; ready: bool
           <Refresh className={refreshing ? "animate-spin" : ""} /> {refreshing ? "reading…" : "refresh"}
         </button>
       </div>
+      {/* Service chips: "all" + each running container. Same segmented-control
+          pattern as the home page filter chips, so an operator can switch from
+          the full container stack to one service's lines and back. */}
+      {containers.length > 1 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-5 py-3">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-muted">log</span>
+          <span className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-line bg-surface p-1">
+            <button
+              onClick={() => setPickedService("")}
+              className={`rounded-md px-3 py-1 text-[12px] font-medium transition-colors ${
+                pickedService === ""
+                  ? "bg-lime/15 text-lime"
+                  : "text-muted hover:bg-surface-2 hover:text-cream"
+              }`}
+            >
+              every container
+            </button>
+            {containers.map((name) => (
+              <button
+                key={name}
+                onClick={() => setPickedService(name)}
+                className={`rounded-md px-3 py-1 text-[12px] font-medium transition-colors ${
+                  pickedService === name
+                    ? "bg-lime/15 text-lime"
+                    : "text-muted hover:bg-surface-2 hover:text-cream"
+                }`}
+              >
+                {name}
+              </button>
+            ))}
+          </span>
+        </div>
+      )}
       <div
         ref={scrollRef}
         className="h-72 overflow-y-auto overscroll-contain px-5 py-4 font-mono text-[12px] leading-6"
@@ -1216,9 +1280,15 @@ function LogsViewer({ serverId, ready, active }: { serverId: string; ready: bool
           <p className="text-muted">reading container logs…</p>
         ) : lines.length === 0 ? (
           <p className="text-muted">no logs yet. once a container is running its output shows here.</p>
+        ) : visibleLines.length === 0 ? (
+          <p className="text-muted">no lines for {pickedService} yet.</p>
         ) : (
-          lines.map((line, i) => {
+          visibleLines.map((line, i) => {
             if (isLogHeader(line)) {
+              // When the operator has zoomed in on one service, the header
+              // becomes redundant (the chip already names it), so it is
+              // suppressed and only the lines below it render.
+              if (pickedService !== "") return null;
               return (
                 <p key={i} className="mt-3 first:mt-0 text-[11px] font-semibold uppercase tracking-wide text-lime">
                   {logHeaderName(line)}
