@@ -3,42 +3,49 @@ package ssh
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/goodylili/mountabo/internal/usecase"
-	"golang.org/x/crypto/ssh"
 )
 
 var _ usecase.DashboardTunnel = (*Client)(nil)
 
-// keepaliveInterval is how often the forwarder pings the server over the SSH
-// connection. A long-lived dashboard tunnel sits idle between requests, so
-// without this the server's sshd idle timeout (or a NAT in the middle) drops
-// the connection and the dashboard stops loading. ~30s is well inside the
-// default ClientAliveInterval window.
+// keepaliveInterval is how often the dashboard proxy pings the server over the
+// SSH connection. The tunnel sits idle between page loads, so without this the
+// server's sshd idle timeout (or a NAT in the middle) drops the link and the
+// dashboard stops loading. ~30s is well inside the default ClientAliveInterval
+// window.
 const keepaliveInterval = 30 * time.Second
 
-// OpenTunnel sets up an SSH local port-forward (the `ssh -L` model): it binds a
-// listener to an ephemeral 127.0.0.1 port on this machine and, for every
-// connection it accepts, dials 127.0.0.1:port on the server through the
-// established SSH connection and copies bytes both directions until either side
-// closes. The listener stays on loopback, so the forward is never exposed off
-// this machine; the SSH client is kept alive for the listener's lifetime and
-// closed by the returned closer. Because it forwards raw TCP, HTTP and
-// websockets ride through transparently and the tool is served at the root of
-// the local port.
+// shutdownTimeout bounds the in-process HTTP shutdown so close never hangs.
+const shutdownTimeout = 2 * time.Second
+
+// OpenTunnel exposes a server-side loopback dashboard (Uptime Kuma) at a local
+// HTTP URL the browser can iframe. It binds an HTTP reverse proxy to an
+// ephemeral 127.0.0.1 port on this machine; every request to that listener is
+// dialed to 127.0.0.1:port on the server through the established SSH connection
+// (so the dashboard is never exposed off the server) and the response is
+// streamed back. Two response headers are stripped on the way back:
+// X-Frame-Options and Content-Security-Policy. Uptime Kuma defaults to
+// X-Frame-Options: SAMEORIGIN, which would block any iframe from a different
+// origin; removing it lets the deployment card embed the dashboard inline
+// instead of forcing a new tab. httputil.ReverseProxy carries HTTP/1.1
+// Connection: Upgrade through to the transport, so the dashboard's websockets
+// (socket.io) ride through transparently.
 func (c *Client) OpenTunnel(ctx context.Context, t usecase.SSHTarget, port int) (string, func() error, error) {
 	client, _, err := c.dial(ctx, t)
 	if err != nil {
 		return "", nil, err
 	}
 
-	// Loopback only: the port is ephemeral (:0) and never bound to a routable
-	// interface, so nothing off this machine can reach the forward.
+	// Loopback only: ephemeral port, never bound to a routable interface, so
+	// nothing off this machine can reach the proxy.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = client.Close()
@@ -46,139 +53,72 @@ func (c *Client) OpenTunnel(ctx context.Context, t usecase.SSHTarget, port int) 
 	}
 
 	remoteAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	fwd := &forwarder{
-		listener: listener,
-		client:   client,
-		remote:   remoteAddr,
-		done:     make(chan struct{}),
+	upstream := &url.URL{Scheme: "http", Host: remoteAddr}
+	rp := httputil.NewSingleHostReverseProxy(upstream)
+	rp.Transport = &http.Transport{
+		// Dial through the SSH connection. The reverse-proxy ignores the
+		// network/addr arguments here because Director already rewrote Host to
+		// the upstream; we always dial the same remote loopback address.
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return client.Dial("tcp", remoteAddr)
+		},
 	}
-	go fwd.serve()
-	fwd.wg.Add(1)
-	go fwd.keepalive()
-
-	return listener.Addr().String(), fwd.close, nil
-}
-
-// forwarder accepts connections on a loopback listener and forwards each through
-// the SSH client to a fixed remote loopback address. It owns the listener and the
-// SSH client for its lifetime; close stops accepting and tears both down.
-type forwarder struct {
-	listener net.Listener
-	client   *ssh.Client
-	remote   string
-
-	closeOnce sync.Once
-	done      chan struct{}
-	wg        sync.WaitGroup
-}
-
-// serve accepts until the listener is closed, handling each connection in its own
-// goroutine tracked by the wait group so close can drain them.
-func (f *forwarder) serve() {
-	for {
-		local, err := f.listener.Accept()
-		if err != nil {
-			return // listener closed by close(), or a fatal accept error
-		}
-		f.wg.Add(1)
-		go func() {
-			defer f.wg.Done()
-			f.handle(local)
-		}()
+	rp.ModifyResponse = func(resp *http.Response) error {
+		// Strip framing-protection headers so the dashboard embeds in an iframe.
+		// CSP also blocks framing via frame-ancestors, hence both removed.
+		resp.Header.Del("X-Frame-Options")
+		resp.Header.Del("Content-Security-Policy")
+		resp.Header.Del("Content-Security-Policy-Report-Only")
+		return nil
 	}
-}
 
-// keepalive pings the server over the SSH connection on a fixed interval so the
-// long-lived tunnel is not torn down while it sits idle between dashboard
-// requests (an sshd idle timeout or an intermediate NAT would otherwise drop
-// it). It exits when the forwarder is closed; a failed request means the
-// connection is already gone, so it stops too. It uses a reusable ticker rather
-// than time.After in the loop so no timer accumulates.
-func (f *forwarder) keepalive() {
-	defer f.wg.Done()
-	ticker := time.NewTicker(keepaliveInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-f.done:
-			return
-		case <-ticker.C:
-			// A global keepalive@openssh.com request; wantReply true so the call
-			// blocks until the server answers, which is what proves the link is
-			// alive. A non-nil error means the connection is dead.
-			if _, _, err := f.client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+	srv := &http.Server{
+		Handler:           rp,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Keep the SSH connection alive between dashboard requests so an idle
+	// tunnel doesn't die.
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(keepaliveInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
 				return
+			case <-ticker.C:
+				if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+					return
+				}
 			}
 		}
-	}
-}
+	}()
 
-// handle dials the remote loopback address through the SSH connection and pipes
-// bytes both ways. Each direction runs in its own goroutine; when one finishes
-// (its source closed), the peer connection is closed to unblock the other copy,
-// then both are awaited. It does NOT return on the first copy alone: a websocket
-// or other long-lived stream often has one half quiet for a long time, and
-// tearing the pair down on the first io.Copy would kill it. If the SSH dial
-// fails (the tunnel is going away or the tool is not listening), the local
-// connection is dropped. A forwarder close also unblocks both copies.
-func (f *forwarder) handle(local net.Conn) {
-	defer func() { _ = local.Close() }()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = srv.Serve(listener)
+	}()
 
-	remote, err := f.client.Dial("tcp", f.remote)
-	if err != nil {
-		return
-	}
-	defer func() { _ = remote.Close() }()
-
-	// Closing the peer conn is what makes a blocked io.Copy on it return, so each
-	// direction unblocks the other when its source ends. once guards against a
-	// double close racing the f.done watcher.
-	var closeOnce sync.Once
-	unblock := func() {
-		closeOnce.Do(func() {
-			_ = local.Close()
-			_ = remote.Close()
+	var once sync.Once
+	closer := func() error {
+		var cerr error
+		once.Do(func() {
+			close(done)
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			cerr = srv.Shutdown(shutdownCtx)
+			if err := client.Close(); err != nil && cerr == nil {
+				cerr = err
+			}
+			wg.Wait()
 		})
+		return cerr
 	}
 
-	// A forwarder close must also tear this pair down even if both directions are
-	// idle; this watcher exits when the pair finishes on its own.
-	pairDone := make(chan struct{})
-	go func() {
-		select {
-		case <-f.done:
-			unblock()
-		case <-pairDone:
-		}
-	}()
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(remote, local)
-		unblock() // local closed its write half; drop remote so its read returns
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(local, remote)
-		unblock() // remote closed; drop local so its read returns
-	}()
-	wg.Wait()
-	close(pairDone)
-}
-
-// close stops accepting new connections, waits for in-flight forwards to drain,
-// and closes the SSH client. It is idempotent.
-func (f *forwarder) close() error {
-	var err error
-	f.closeOnce.Do(func() {
-		close(f.done)
-		err = f.listener.Close()
-		f.wg.Wait()
-		if cerr := f.client.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	})
-	return err
+	return listener.Addr().String(), closer, nil
 }

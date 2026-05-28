@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Badge } from "@/components/badge";
 import { ServerAvatar } from "@/components/server-avatar";
@@ -20,7 +20,7 @@ import {
   Trash,
 } from "@/components/icons";
 import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
-import type { Domain, ServerView, SetupOption } from "@/lib/servers";
+import type { Domain, ServerView } from "@/lib/servers";
 import {
   type ServerMetrics,
   fetchServerMetrics,
@@ -54,22 +54,13 @@ const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 // How often to re-poll the GitHub run walkthrough while a run is in progress.
 const STEP_POLL_MS = 4000;
 
-// The self-hosted monitoring tools mountabo can install (hardening option ids),
-// with where each lives once set up. Only Uptime Kuma is supported; it is
-// reached through an SSH local port-forward tunnel the backend opens.
-const MONITORING_TOOLS = [
-  { id: "uptime-kuma", label: "Uptime Kuma", access: "uptime monitor, 127.0.0.1:3001 through an ssh tunnel" },
-];
-
 export function MonitorView({
   deployments,
   servers,
-  catalog,
   stamp,
 }: {
   deployments: Deployment[];
   servers: ServerView[];
-  catalog: SetupOption[];
   stamp: string;
 }) {
   const router = useRouter();
@@ -113,22 +104,8 @@ export function MonitorView({
     startRefresh(() => router.refresh());
   }
 
-  const optionName = useCallback(
-    (id: string) => catalog.find((o) => o.id === id)?.name ?? id,
-    [catalog],
-  );
-
-  // The monitoring-tools panel: which tools the operator has ticked for the open
-  // server (keyed by server id so each card keeps its own selection).
-  const [monitoringPick, setMonitoringPick] = useState<Record<string, string[]>>({});
-
-  // Live streams (apply monitoring / add domain / remove domain) for the open
-  // card. Each only opens after its ConfirmAction gate is confirmed.
-  const [monitorTarget, setMonitorTarget] = useState<{
-    server: ServerView;
-    desired: string[];
-    adding: string[];
-  } | null>(null);
+  // Live streams (add domain / remove domain) for the open card. Each only
+  // opens after its ConfirmAction gate is confirmed.
   const [domainTarget, setDomainTarget] = useState<
     | { server: ServerView; mode: "add"; value: DomainFormValue }
     | { server: ServerView; mode: "remove"; host: string }
@@ -136,11 +113,6 @@ export function MonitorView({
   >(null);
 
   // Confirmation gates. Nothing touches a server until one is confirmed.
-  const [confirmMonitor, setConfirmMonitor] = useState<{
-    server: ServerView;
-    desired: string[];
-    adding: string[];
-  } | null>(null);
   const [confirmDomain, setConfirmDomain] = useState<
     | { server: ServerView; mode: "add"; value: DomainFormValue }
     | { server: ServerView; mode: "remove"; host: string }
@@ -197,14 +169,8 @@ export function MonitorView({
     startRefresh(() => router.refresh()); // re-pull deployments + their runs
   }
 
-  // After a successful apply/domain change, reflect it locally so the panels
-  // stay current without a refetch, then refresh to re-pull authoritative state.
-  function recordMonitoring(serverId: string, desired: string[]) {
-    setServerList((list) =>
-      list.map((s) => (s.id === serverId ? { ...s, options: desired } : s)),
-    );
-    setMonitoringPick((p) => ({ ...p, [serverId]: [] }));
-  }
+  // After a successful domain change, reflect it locally so the panels stay
+  // current without a refetch, then refresh to re-pull authoritative state.
   function recordDomainAdd(serverId: string, value: DomainFormValue) {
     const entry: Domain = {
       host: value.host,
@@ -280,7 +246,6 @@ export function MonitorView({
           const isOpen = open === d.app;
           const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
           const latest = d.runs[0];
-          const picked = monitoringPick[d.serverId] ?? [];
           return (
             <section key={d.app} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
               <button
@@ -316,11 +281,6 @@ export function MonitorView({
                   server={server}
                   metrics={m}
                   health={health[d.app]}
-                  picked={picked}
-                  onPick={(ids) => setMonitoringPick((p) => ({ ...p, [d.serverId]: ids }))}
-                  onApplyMonitoring={(server, desired, adding) =>
-                    setConfirmMonitor({ server, desired, adding })
-                  }
                   onAddDomain={(server, value) =>
                     setConfirmDomain({ server, mode: "add", value })
                   }
@@ -328,7 +288,6 @@ export function MonitorView({
                     setConfirmDomain({ server, mode: "remove", host })
                   }
                   onDelete={() => setConfirmDelete(d)}
-                  optionName={optionName}
                 />
               )}
             </section>
@@ -337,23 +296,6 @@ export function MonitorView({
       </div>
 
       {/* Live streams: each opens only after its gate is confirmed. */}
-      {monitorTarget && (
-        <StreamLog
-          title={`installing monitoring on ${monitorTarget.server.name}`}
-          subtitle={monitorTarget.adding.map(optionName).join(", ")}
-          timezone={monitorTarget.server.timezone}
-          url={`/api/servers/${monitorTarget.server.id}/options?set=${encodeURIComponent(
-            monitorTarget.desired.join(","),
-          )}`}
-          onDone={(ok) => {
-            if (ok) {
-              recordMonitoring(monitorTarget.server.id, monitorTarget.desired);
-              startRefresh(() => router.refresh());
-            }
-          }}
-          onClose={() => setMonitorTarget(null)}
-        />
-      )}
       {domainTarget && (
         <StreamLog
           title={
@@ -380,34 +322,6 @@ export function MonitorView({
       )}
 
       {/* Confirmation gates. */}
-      {confirmMonitor && (
-        <ConfirmAction
-          title={`install monitoring on ${confirmMonitor.server.name}`}
-          subtitle={confirmMonitor.server.ip}
-          summary={
-            <>
-              mountabo will connect to <span className="text-cream">{confirmMonitor.server.name}</span> as
-              the mountabo user (with sudo) and install{" "}
-              <span className="text-lime">
-                {confirmMonitor.adding.map(optionName).join(", ")}
-              </span>
-              . your existing hardening stays untouched. nothing runs until you confirm.
-            </>
-          }
-          steps={[
-            "connect to the server as the mountabo user over SSH (with sudo)",
-            ...confirmMonitor.adding.map((id) => `install and enable: ${optionName(id)}`),
-            "leave every other applied option exactly as it is",
-          ]}
-          confirmLabel="install monitoring"
-          onConfirm={() => {
-            setMonitorTarget(confirmMonitor);
-            setConfirmMonitor(null);
-          }}
-          onCancel={() => setConfirmMonitor(null)}
-        />
-      )}
-
       {confirmDomain && confirmDomain.mode === "add" && (
         <ConfirmAction
           title={`add ${confirmDomain.value.host}`}
@@ -588,25 +502,17 @@ function ExpandedCard({
   server,
   metrics: m,
   health,
-  picked,
-  onPick,
-  onApplyMonitoring,
   onAddDomain,
   onRemoveDomain,
   onDelete,
-  optionName,
 }: {
   deployment: Deployment;
   server?: ServerView;
   metrics: ServerMetrics | null | undefined;
   health: AppHealth | null | undefined;
-  picked: string[];
-  onPick: (ids: string[]) => void;
-  onApplyMonitoring: (server: ServerView, desired: string[], adding: string[]) => void;
   onAddDomain: (server: ServerView, value: DomainFormValue) => void;
   onRemoveDomain: (server: ServerView, host: string) => void;
   onDelete: () => void;
-  optionName: (id: string) => string;
 }) {
   const latest = d.runs[0];
   const [owner, repo] = splitRepo(d.repo);
@@ -640,7 +546,6 @@ function ExpandedCard({
     | "runs"
     | "logs"
     | "dashboards"
-    | "monitoring"
     | "domains"
     | "timeline";
 
@@ -651,9 +556,8 @@ function ExpandedCard({
     { key: "runs", label: `recent runs (${d.runs.length})` },
     { key: "logs", label: "container logs" },
     ...(server && dashboards.length > 0
-      ? [{ key: "dashboards" as const, label: `monitoring dashboards (${dashboards.length})` }]
+      ? [{ key: "dashboards" as const, label: `monitoring (${dashboards.length})` }]
       : []),
-    { key: "monitoring", label: "monitoring tools" },
     ...(server
       ? [{ key: "domains" as const, label: `custom domains (${envDomains.length})` }]
       : []),
@@ -837,17 +741,6 @@ function ExpandedCard({
           <DashboardsPanel serverId={server.id} dashboards={dashboards} active />
         )}
 
-        {/* per-tool monitoring install */}
-        {tab === "monitoring" && (
-          <MonitoringPanel
-            server={server}
-            picked={picked}
-            onPick={onPick}
-            onApply={onApplyMonitoring}
-            optionName={optionName}
-          />
-        )}
-
         {/* custom domains, scoped to this environment: only domains pointing at
             this deployment's port are listed and the add form defaults to it,
             so each environment manages its own domains from its own card. */}
@@ -974,18 +867,26 @@ function DashboardCard({
         </span>
       </div>
       {url ? (
-        <div className="flex flex-col items-center justify-center gap-3 bg-black/40 px-5 py-10 text-center">
-          <p className="max-w-md text-[14px] leading-7 text-body">
-            the {tool.label} dashboard is ready over the ssh tunnel. it cannot be embedded here, so it
-            opens in a new tab where you can view and configure your monitors.
-          </p>
+        <div className="relative">
+          {/* The backend's reverse proxy strips X-Frame-Options and CSP from the
+              dashboard's responses, so the iframe loads even though it is a
+              different origin from the app. A "pop out" link is kept beside it
+              for full-screen use. */}
+          <iframe
+            src={url}
+            title={tool.label}
+            className="block h-[640px] w-full border-0 bg-black"
+            // Allow same-origin so the dashboard's cookies/auth keep working,
+            // and allow scripts + forms so its UI is interactive.
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+          />
           <a
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-2 rounded-md border border-lime/50 bg-lime/[0.08] px-4 py-2 text-[13px] font-medium text-lime transition-colors hover:bg-lime/[0.16]"
+            className="absolute right-3 top-3 flex items-center gap-1.5 rounded-md border border-line bg-surface/95 px-2.5 py-1.5 text-[12px] text-muted backdrop-blur transition-colors hover:border-line-strong hover:text-cream"
           >
-            open {tool.label} <ExternalLink />
+            open in a tab <ExternalLink />
           </a>
         </div>
       ) : errored ? (
@@ -1292,94 +1193,6 @@ function LogsViewer({ serverId, ready, active }: { serverId: string; ready: bool
   );
 }
 
-// MonitoringPanel lets the operator pick which monitoring tools to enable, then
-// applies only the chosen subset, preserving every other (non-monitoring) option
-// already on the server so installing monitoring never removes hardening.
-function MonitoringPanel({
-  server,
-  picked,
-  onPick,
-  onApply,
-  optionName,
-}: {
-  server?: ServerView;
-  picked: string[];
-  onPick: (ids: string[]) => void;
-  onApply: (server: ServerView, desired: string[], adding: string[]) => void;
-  optionName: (id: string) => string;
-}) {
-  if (!server) {
-    return (
-      <p className="mt-4 text-[13px] text-muted">
-        this server is not set up yet, so monitoring tools cannot be installed.
-      </p>
-    );
-  }
-  const current = new Set(server.options ?? []);
-  // Only tools not already installed are selectable.
-  const available = MONITORING_TOOLS.filter((t) => !current.has(t.id));
-  const toggle = (id: string) =>
-    onPick(picked.includes(id) ? picked.filter((p) => p !== id) : [...picked, id]);
-
-  // Preserve every non-monitoring option (hardening) and every monitoring tool
-  // already on, then add the picked subset.
-  const adding = picked.filter((id) => !current.has(id));
-  const desired = Array.from(new Set([...(server.options ?? []), ...adding]));
-
-  return (
-    <div className="mt-4 space-y-4">
-      <p className="text-[13px] leading-6 text-body">
-        pick which monitoring tools to install on{" "}
-        <span className="text-cream">{server.name}</span>. only the tools you check are added, and your
-        existing hardening stays exactly as it is.
-      </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {MONITORING_TOOLS.map((t) => {
-          const installed = current.has(t.id);
-          const checked = installed || picked.includes(t.id);
-          return (
-            <label
-              key={t.id}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border bg-surface p-4 transition-colors ${
-                installed
-                  ? "border-lime/40"
-                  : picked.includes(t.id)
-                    ? "border-lime/50 bg-lime/[0.05]"
-                    : "border-line hover:border-line-strong"
-              } ${installed ? "cursor-default" : ""}`}
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                disabled={installed}
-                onChange={() => toggle(t.id)}
-                className="mt-0.5 h-4 w-4 accent-lime"
-              />
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-[14px] font-medium text-cream">
-                  {t.label}
-                  {installed && <span className="text-[12px] text-blue">installed</span>}
-                </span>
-                <span className="mt-1 block text-[12.5px] leading-6 text-muted">{t.access}</span>
-              </span>
-            </label>
-          );
-        })}
-      </div>
-      <button
-        onClick={() => onApply(server, desired, adding)}
-        disabled={adding.length === 0}
-        className="flex w-full items-center justify-center gap-2 rounded-lg border border-lime/50 bg-lime/[0.06] px-4 py-2.5 text-[12.5px] font-medium text-lime transition-colors hover:bg-lime/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {available.length === 0
-          ? "all monitoring tools installed"
-          : adding.length === 0
-            ? "pick the tools to install"
-            : `install ${adding.map(optionName).join(", ")}`}
-      </button>
-    </div>
-  );
-}
 
 // Builds the add-domain SSE URL: ?host=&upstream=&aliases=&email=&staging=.
 function addDomainUrl(serverId: string, v: DomainFormValue): string {
