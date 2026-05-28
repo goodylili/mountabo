@@ -81,8 +81,13 @@ func run() error {
 	// this machine's loopback so the browser loads it directly. Tunnels are torn
 	// down on shutdown.
 	serverDashboardSvc := usecase.NewServerDashboardService(serverStore, keyStore, sshClient)
+	// Uptime Kuma has no public HTTP setup endpoint, so mountabo generates a
+	// fresh admin credential pair, seeds it into UK's SQLite from inside the
+	// container, and persists it in the keychain so the dashboard panel can
+	// surface it the next time the page loads.
+	uptimeKumaAdminSvc := usecase.NewUptimeKumaAdminService(serverStore, keyStore, sshClient)
 	defer func() { _ = serverDashboardSvc.Close() }()
-	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, serverDashboardSvc, logger)
+	serversHandler := httpadapter.NewServersHandler(serverSvc, serverPortSvc, serverMetricsSvc, serverLogsSvc, serverDashboardSvc, uptimeKumaAdminSvc, logger)
 
 	// Compose the deploy flow: commit the workflow + deploy.sh and provision the
 	// environment/secrets (all github), reading the server record (JSON store)

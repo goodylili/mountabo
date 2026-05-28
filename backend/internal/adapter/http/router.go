@@ -54,6 +54,10 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	// the loopback URL the browser loads directly (raw TCP, so HTTP + websockets
 	// both work and the tool is served at root).
 	mux.HandleFunc("POST /api/servers/{id}/dashboard/{tool}/open", sv.OpenDashboard)
+	// Uptime Kuma admin: read the stored credentials, or generate fresh ones and
+	// seed them into UK's SQLite so the operator can actually log in.
+	mux.HandleFunc("GET /api/servers/{id}/dashboard/uptime-kuma/admin", sv.UptimeKumaAdmin)
+	mux.HandleFunc("POST /api/servers/{id}/dashboard/uptime-kuma/admin/reset", sv.ResetUptimeKumaAdmin)
 	mux.HandleFunc("GET /api/servers/{id}/options", sv.ApplyOptions)
 	mux.HandleFunc("GET /api/servers/domains/preview", sv.DomainsPreview)
 	mux.HandleFunc("GET /api/servers/{id}/domains/add", sv.AddDomain)

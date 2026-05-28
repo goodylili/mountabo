@@ -23,20 +23,69 @@ type ServersHandler struct {
 	metrics   *usecase.ServerMetricsService
 	logs      *usecase.ServerLogsService
 	dashboard *usecase.ServerDashboardService
+	ukAdmin   *usecase.UptimeKumaAdminService
 	log       *slog.Logger
 }
 
 // NewServersHandler wires the handler to the server service, the port-check,
-// metrics, logs, and dashboard-proxy services, and a logger.
-func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, metrics *usecase.ServerMetricsService, logs *usecase.ServerLogsService, dashboard *usecase.ServerDashboardService, log *slog.Logger) *ServersHandler {
+// metrics, logs, dashboard-proxy, and uptime kuma admin services, and a logger.
+func NewServersHandler(svc *usecase.ServerService, ports *usecase.ServerPortService, metrics *usecase.ServerMetricsService, logs *usecase.ServerLogsService, dashboard *usecase.ServerDashboardService, ukAdmin *usecase.UptimeKumaAdminService, log *slog.Logger) *ServersHandler {
 	return &ServersHandler{
 		svc:       svc,
 		ports:     ports,
 		metrics:   metrics,
 		logs:      logs,
 		dashboard: dashboard,
+		ukAdmin:   ukAdmin,
 		log:       log,
 	}
+}
+
+// UptimeKumaAdmin returns the stored admin credentials for id's Uptime Kuma,
+// or {hasAdmin:false} when none have been generated yet (so the panel can show
+// a "set up admin" CTA instead of an empty box).
+func (h *ServersHandler) UptimeKumaAdmin(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	admin, ok, err := h.ukAdmin.Get(id)
+	if err != nil {
+		h.log.Error("read uptime kuma admin failed", "id", id, "err", err)
+		h.writeError(w, nethttp.StatusInternalServerError, "could not read admin credentials")
+		return
+	}
+	if !ok {
+		h.writeJSON(w, nethttp.StatusOK, map[string]bool{"hasAdmin": false})
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, map[string]any{
+		"hasAdmin": true,
+		"username": admin.Username,
+		"password": admin.Password,
+	})
+}
+
+// ResetUptimeKumaAdmin generates a fresh admin user, seeds it into Uptime Kuma's
+// SQLite from inside the container, persists it in the keychain, and returns
+// the credentials so the panel can reveal them.
+func (h *ServersHandler) ResetUptimeKumaAdmin(w nethttp.ResponseWriter, r *nethttp.Request) {
+	id := r.PathValue("id")
+	admin, err := h.ukAdmin.Reset(r.Context(), id)
+	switch {
+	case errors.Is(err, usecase.ErrServerNotFound):
+		h.writeError(w, nethttp.StatusNotFound, "server not found")
+		return
+	case errors.Is(err, usecase.ErrToolNotInstalled):
+		h.writeError(w, nethttp.StatusNotFound, "uptime kuma is not installed on this server")
+		return
+	case err != nil:
+		h.log.Error("reset uptime kuma admin failed", "id", id, "err", err)
+		h.writeError(w, nethttp.StatusBadGateway, "could not set the uptime kuma admin")
+		return
+	}
+	h.writeJSON(w, nethttp.StatusOK, map[string]any{
+		"hasAdmin": true,
+		"username": admin.Username,
+		"password": admin.Password,
+	})
 }
 
 // Metrics reports a server's live host health (cpu/load, memory, disk, uptime),

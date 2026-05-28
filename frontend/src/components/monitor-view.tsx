@@ -43,6 +43,7 @@ import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
 import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
 import { getRepoBranches } from "@/lib/branches";
+import { type UptimeKumaAdmin, fetchUptimeKumaAdmin, resetUptimeKumaAdmin } from "@/lib/uptime-kuma-admin";
 
 const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
@@ -885,6 +886,37 @@ function DashboardCard({
   const [url, setUrl] = useState<string | null>(null);
   const [errored, setErrored] = useState(false);
   const [nonce, setNonce] = useState(0);
+  // Uptime Kuma has no public HTTP setup endpoint, so the operator can never
+  // guess the admin password. mountabo offers to generate one and seed it into
+  // UK's SQLite from inside the container; the result is shown above the
+  // iframe so the operator can copy it into the login form below. null = not
+  // loaded; { hasAdmin:false } = none stored; { hasAdmin:true, ... } = stored.
+  const isKuma = tool.id === "uptime-kuma";
+  const [admin, setAdmin] = useState<UptimeKumaAdmin | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Read the stored credentials the first time the section becomes active. The
+  // setState only runs once the fetch resolves, never synchronously here.
+  useEffect(() => {
+    if (!isKuma || !active || admin !== null) return;
+    const ctrl = new AbortController();
+    fetchUptimeKumaAdmin(serverId, ctrl.signal).then((res) => {
+      if (!ctrl.signal.aborted) setAdmin(res);
+    });
+    return () => ctrl.abort();
+  }, [isKuma, active, serverId, admin]);
+
+  async function setUpAdmin() {
+    if (resetting) return;
+    setResetting(true);
+    const next = await resetUptimeKumaAdmin(serverId);
+    if (next) {
+      setAdmin(next);
+      setShowPassword(true);
+    }
+    setResetting(false);
+  }
 
   // Open the tunnel the first time the section becomes active. The backend
   // reuses an existing tunnel for the same (server, tool) pair, so re-opening is
@@ -914,6 +946,61 @@ function DashboardCard({
           <span className="text-[15px] font-medium text-cream">{tool.label}</span>
         </span>
       </div>
+      {isKuma && (
+        <div className="border-b border-line bg-surface/60 px-5 py-3.5">
+          {admin === null ? (
+            <p className="text-[12.5px] text-muted">reading admin credentials…</p>
+          ) : admin.hasAdmin ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0 text-[12.5px] leading-6 text-body">
+                <p className="text-muted">
+                  log in with these credentials. mountabo generated them and seeded them into uptime kuma.
+                </p>
+                <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[13px]">
+                  <span>
+                    <span className="text-muted">username</span>{" "}
+                    <span className="select-all text-cream">{admin.username}</span>
+                  </span>
+                  <span>
+                    <span className="text-muted">password</span>{" "}
+                    <span className="select-all text-cream">
+                      {showPassword ? admin.password : "•".repeat(admin.password.length)}
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-muted transition-colors hover:border-line-strong hover:text-cream"
+                  >
+                    {showPassword ? "hide" : "show"}
+                  </button>
+                </p>
+              </div>
+              <button
+                onClick={() => void setUpAdmin()}
+                disabled={resetting}
+                className="shrink-0 rounded-md border border-line px-3 py-1.5 text-[12px] text-muted transition-colors hover:border-line-strong hover:text-cream disabled:opacity-50"
+              >
+                {resetting ? "regenerating…" : "regenerate"}
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-[12.5px] leading-6 text-body">
+                uptime kuma is asking for an admin to log in, but it has no public setup api. click set up
+                admin and mountabo will generate a password, seed it directly into the container, and show
+                it once.
+              </p>
+              <button
+                onClick={() => void setUpAdmin()}
+                disabled={resetting}
+                className="shrink-0 rounded-md border border-lime/50 bg-lime/[0.08] px-4 py-2 text-[12.5px] font-medium text-lime transition-colors hover:bg-lime/[0.16] disabled:opacity-50"
+              >
+                {resetting ? "setting up…" : "set up admin"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {url ? (
         <div className="relative">
           {/* The backend's reverse proxy strips X-Frame-Options and CSP from the
