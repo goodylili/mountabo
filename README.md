@@ -119,6 +119,22 @@ Use the monitor screen to see configured deployments, recent GitHub Actions runs
 
 For a ready server, Mountabo can configure nginx and Let's Encrypt for a custom domain pointing at one of your app ports.
 
+## Terminal
+
+![Terminal page with the AI helper](docs/screenshots/terminal.png)
+
+Open `/terminal` to get a web shell on any of your set up servers.
+
+- Pick a server from the dropdown; the prompt becomes `mountabo@<server> <cwd> %`.
+- Type a shell command and run it. The command runs as the `mountabo` user over SSH, with the working directory carried between commands so `cd` and relative paths feel persistent.
+- By default each command goes through a confirm step. Flip `express mode` on to run commands immediately without the per command confirm.
+
+### AI helper
+
+Below the terminal there is an AI helper. Describe what you want in plain English (for example, "I want to know if there are any containers running") and it suggests a shell command with a short explanation. Click `use this command` to fill the terminal above with the suggestion, then review and run it yourself. The helper only suggests; nothing it returns is ever executed automatically.
+
+To enable the helper, set `ANTHROPIC_API_KEY` in your `.env` to a key from [the Anthropic console](https://console.anthropic.com) and restart the backend. Without it, the terminal still works and the helper shows a hint to set the key.
+
 ## Notes
 
 - Mountabo runs locally.
