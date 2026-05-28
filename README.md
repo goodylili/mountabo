@@ -6,6 +6,8 @@ You run it locally, connect GitHub, add a VPS, and configure a repo once. After 
 
 ## Examples
 
+![Repo picker on the home page, with visibility and container filters](docs/screenshots/repos.png)
+
 Mountabo deploys any repository with a `Dockerfile` or a Docker Compose setup, whatever the stack. A few examples you can deploy from the picker:
 
 - [ibc-go](https://github.com/goodylili/ibc-go), Go
