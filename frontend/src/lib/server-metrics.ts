@@ -11,7 +11,8 @@ export type ServerMetrics = {
 };
 
 // fetchServerMetrics reads a server's live host metrics. Returns null on any
-// failure (server not set up, unreachable) so the monitor falls back to "n/a".
+// failure (server not set up, unreachable); the monitor polls and keeps the
+// last good reading, so a null is simply ignored rather than shown.
 export async function fetchServerMetrics(serverId: string, signal?: AbortSignal): Promise<ServerMetrics | null> {
   if (!serverId) return null;
   // The metrics are read over SSH on demand and can fail transiently (a cold
@@ -39,18 +40,18 @@ export function fmtLoad(m: ServerMetrics): string {
 }
 
 export function fmtMem(m: ServerMetrics): string {
-  if (!m.memTotalMB) return "n/a";
+  if (!m.memTotalMB) return "reading…";
   const gb = (v: number) => (v / 1024).toFixed(v >= 1024 ? 1 : 2);
   return `${gb(m.memUsedMB)} / ${gb(m.memTotalMB)} GB`;
 }
 
 export function fmtDisk(m: ServerMetrics): string {
-  if (!m.diskTotalGB) return "n/a";
+  if (!m.diskTotalGB) return "reading…";
   return `${m.diskUsedGB} / ${m.diskTotalGB} GB`;
 }
 
 export function fmtUptime(m: ServerMetrics): string {
-  if (!m.uptimeSeconds) return "n/a";
+  if (!m.uptimeSeconds) return "reading…";
   const d = Math.floor(m.uptimeSeconds / 86400);
   const h = Math.floor((m.uptimeSeconds % 86400) / 3600);
   if (d > 0) return `${d}d ${h}h`;

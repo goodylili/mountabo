@@ -131,15 +131,27 @@ export function MonitorView({
   const openServerId = openDeployment?.serverId ?? "";
 
   // Read the open deployment's server metrics on demand (no daemon), keyed by
-  // server id so each is fetched once until a refresh clears the cache.
+  // server id. Poll while the card is open so a transient SSH miss or a cold
+  // backend recovers on its own, and only ever store a real reading: a later
+  // miss never clobbers the last good one, so the cards stay populated and
+  // never fall back to n/a once they have loaded.
   useEffect(() => {
-    if (!openServerId || openServerId in metrics) return;
+    if (!openServerId) return;
     const ctrl = new AbortController();
-    fetchServerMetrics(openServerId, ctrl.signal).then((m) =>
-      setMetrics((prev) => ({ ...prev, [openServerId]: m })),
-    );
-    return () => ctrl.abort();
-  }, [openServerId, metrics]);
+    let active = true;
+    const read = () => {
+      fetchServerMetrics(openServerId, ctrl.signal).then((m) => {
+        if (active && m) setMetrics((prev) => ({ ...prev, [openServerId]: m }));
+      });
+    };
+    read();
+    const timer = setInterval(read, 8000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      ctrl.abort();
+    };
+  }, [openServerId]);
 
   // When the add-domain gate opens, fetch the exact nginx config + script the
   // backend would write, so the operator sees precisely what runs before it
@@ -246,7 +258,7 @@ export function MonitorView({
         {visibleDeployments.map((d) => {
           const server = serverById.get(d.serverId);
           const isOpen = open === d.app;
-          const m = metrics[d.serverId]; // undefined = not fetched, null = unavailable
+          const m = metrics[d.serverId]; // undefined = still reading, else last good reading
           const latest = d.runs[0];
           return (
             <section key={d.app} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
@@ -652,10 +664,10 @@ function ExpandedCard({
         {/* host metrics: small enough to stay above the tab bar so cpu/memory
             /disk/uptime are visible no matter which tab is active. */}
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-line bg-line sm:grid-cols-4">
-          <BigMetric label="cpu" value={m === undefined ? "reading…" : m ? fmtLoad(m) : "n/a"} />
-          <BigMetric label="memory" value={m === undefined ? "reading…" : m ? fmtMem(m) : "n/a"} />
-          <BigMetric label="disk" value={m === undefined ? "reading…" : m ? fmtDisk(m) : "n/a"} />
-          <BigMetric label="uptime" value={m === undefined ? "reading…" : m ? fmtUptime(m) : "n/a"} />
+          <BigMetric label="cpu" value={m ? fmtLoad(m) : "reading…"} />
+          <BigMetric label="memory" value={m ? fmtMem(m) : "reading…"} />
+          <BigMetric label="disk" value={m ? fmtDisk(m) : "reading…"} />
+          <BigMetric label="uptime" value={m ? fmtUptime(m) : "reading…"} />
         </div>
 
         {/* tab bar: same segmented-control pattern as the home page's
