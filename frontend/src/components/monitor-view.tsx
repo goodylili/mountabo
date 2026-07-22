@@ -19,7 +19,7 @@ import {
   Terminal,
   Trash,
 } from "@/components/icons";
-import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
+import type { Deployment, DeployRun, Release, ReleaseStatus, RunStatus } from "@/lib/data";
 import type { Domain, ServerView } from "@/lib/servers";
 import {
   type ServerMetrics,
@@ -49,6 +49,20 @@ const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
   failed: "bg-red-400",
   running: "bg-lime",
+};
+
+// Release status extends run status with "pending" (recorded at deploy time, no
+// completed run yet). Dot colours and Badge tones reuse the run palette.
+const releaseColor: Record<ReleaseStatus, string> = {
+  ...runColor,
+  pending: "bg-muted",
+};
+
+const releaseTone: Record<ReleaseStatus, "blue" | "red" | "lime" | "gray"> = {
+  success: "blue",
+  failed: "red",
+  running: "lime",
+  pending: "gray",
 };
 
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
@@ -585,7 +599,7 @@ function ExpandedCard({
       ? [{ key: "domains" as const, label: `custom domains (${envDomains.length})` }]
       : []),
     ...(timelineCount > 0
-      ? [{ key: "timeline" as const, label: `deploy timeline (${d.deploys ?? 0})` }]
+      ? [{ key: "timeline" as const, label: `releases (${d.deploys ?? 0})` }]
       : []),
   ];
 
@@ -818,15 +832,11 @@ function ExpandedCard({
           </div>
         )}
 
-        {/* deploy timeline */}
+        {/* release history */}
         {tab === "timeline" && timelineCount > 0 && (
-          <ul className="space-y-3 text-[14px]">
-            {(d.timeline ?? []).map((e, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                <span className="text-body">configured for {e.environment}</span>
-                <span className="ml-auto text-muted">{e.when}</span>
-              </li>
+          <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+            {(d.timeline ?? []).map((rel, i) => (
+              <ReleaseRow key={i} release={rel} />
             ))}
           </ul>
         )}
@@ -1545,6 +1555,43 @@ function RunRow({ run }: { run: DeployRun }) {
           rel="noopener noreferrer"
           className="shrink-0 text-muted transition-colors hover:text-cream"
           aria-label={`open run ${run.sha} on github`}
+        >
+          <ExternalLink />
+        </a>
+      ) : (
+        <span className="w-3.5 shrink-0" />
+      )}
+    </li>
+  );
+}
+
+// ReleaseRow renders one entry of a deployment's release history: its status
+// (overlaid live from the matching Actions run when available), the deployed
+// commit, the environment, who triggered it, and when. Read-only; rollback
+// actions come in a later phase.
+function ReleaseRow({ release }: { release: Release }) {
+  const hasSHA = release.sha && release.sha !== "n/a";
+  return (
+    <li className="flex items-center gap-3 px-5 py-3 text-[13px]">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${releaseColor[release.status]}`} />
+      {hasSHA ? (
+        <code className="shrink-0 font-mono text-cream">{release.sha}</code>
+      ) : (
+        <span className="w-14 shrink-0 text-muted">n/a</span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-body">{release.environment}</span>
+      <Badge tone={releaseTone[release.status]}>{release.status}</Badge>
+      {release.actor && (
+        <span className="hidden text-muted sm:inline">{release.actor}</span>
+      )}
+      <span className="w-16 text-right text-muted">{release.when}</span>
+      {release.runUrl ? (
+        <a
+          href={release.runUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 text-muted transition-colors hover:text-cream"
+          aria-label={`open the run for release ${release.sha} on github`}
         >
           <ExternalLink />
         </a>

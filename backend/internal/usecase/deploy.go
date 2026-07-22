@@ -118,6 +118,13 @@ type DeployKeyInstaller interface {
 	InstallDeployKey(ctx context.Context, t SSHTarget, keyName, privateKey string, out io.Writer) error
 }
 
+// RefResolver reports the head commit SHA of a repo branch, so a deploy can
+// record the exact commit it is releasing. Best-effort at deploy time: a failure
+// leaves the release's commit unset rather than blocking the deploy.
+type RefResolver interface {
+	HeadSHA(ctx context.Context, t Token, owner, repo, branch string) (string, error)
+}
+
 // DeployService configures continuous deployment of a repo to a server: it
 // commits the workflow and deploy.sh, creates the deployment environment, and
 // stores the secrets the workflow needs (server connection details, managed by
@@ -135,11 +142,15 @@ type DeployService struct {
 	deployKeys RepoDeployKeyManager
 	installer  DeployKeyInstaller
 	dispatcher WorkflowDispatcher
+	refs       RefResolver
+	accounts   AccountFetcher
 }
 
-// NewDeployService wires the service to its ports.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, dispatcher WorkflowDispatcher) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, dispatcher: dispatcher}
+// NewDeployService wires the service to its ports. refs and accounts enrich the
+// recorded release with the deployed commit and the triggering GitHub login;
+// both are read best-effort and never block a deploy.
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, dispatcher WorkflowDispatcher, refs RefResolver, accounts AccountFetcher) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, dispatcher: dispatcher, refs: refs, accounts: accounts}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -248,6 +259,20 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("set environment secrets: %w", err)
 	}
 
+	// Resolve the release's commit and actor for the durable record. Both are
+	// best-effort: a failure leaves the field empty and only notes it, since the
+	// deploy has already succeeded and must not fail on tracking metadata.
+	commitSHA, err := s.refs.HeadSHA(ctx, token, in.Owner, in.Repo, in.Branch)
+	if err != nil {
+		progress(out, "note: could not resolve commit for %s (release will omit it): %v", in.Branch, err)
+	}
+	var actor string
+	if account, aerr := s.accounts.Account(ctx, token); aerr != nil {
+		progress(out, "note: could not resolve deploy actor (release will omit it): %v", aerr)
+	} else {
+		actor = account.Login
+	}
+
 	// Record the deployment so the monitor can show its history. A failure here
 	// must not fail the deploy, which already succeeded, so it is only noted.
 	record := Deployment{
@@ -261,6 +286,8 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		WorkflowFile: fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch),
 		Port:         primaryPort(in.Ports),
 		CreatedAt:    time.Now().UTC(),
+		CommitSHA:    commitSHA,
+		Actor:        actor,
 	}
 	if err := s.history.Save(record); err != nil {
 		progress(out, "note: deploy succeeded but recording history failed: %v", err)
