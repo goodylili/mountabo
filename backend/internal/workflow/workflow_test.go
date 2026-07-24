@@ -58,3 +58,16 @@ func TestWorkflow_EnvironmentDefaultsToBranch(t *testing.T) {
 		t.Error("environment should default to the branch")
 	}
 }
+
+// TestWorkflow_Triggers guards the run-trigger contract: the branch push trigger
+// is the SOLE source of automatic deploy runs (the deploy flow no longer calls
+// workflow_dispatch, to avoid a duplicate run), and workflow_dispatch stays for
+// manual re-runs. A future edit dropping either must fail here.
+func TestWorkflow_Triggers(t *testing.T) {
+	w := Workflow(base())
+	for _, want := range []string{"on:", "push:", "branches:", "- main", "workflow_dispatch:"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("workflow triggers missing %q", want)
+		}
+	}
+}

@@ -14,7 +14,12 @@ import (
 
 // schema is applied on open; idempotent so it runs every startup. deployments
 // holds the current state (one row per target); deploy_events is an append-only
-// log so deploy history is tracked and queryable over time.
+// log so deploy history is tracked and queryable over time. Each deploy_events
+// row is a release: the extra columns (commit_sha, image_ref, status, health,
+// actor, run_url, prev_event_id) turn the bare event into a durable release
+// record that rollback and release history build on. Fields known only after a
+// deploy runs (image_ref, health, and the terminal status/run_url) are provisioned
+// here and populated by later phases; status defaults to 'pending'.
 const schema = `
 CREATE TABLE IF NOT EXISTS deployments (
 	owner TEXT NOT NULL,
@@ -37,10 +42,32 @@ CREATE TABLE IF NOT EXISTS deploy_events (
 	environment TEXT NOT NULL,
 	server_id TEXT NOT NULL,
 	app TEXT NOT NULL,
-	at TEXT NOT NULL
+	at TEXT NOT NULL,
+	commit_sha TEXT NOT NULL DEFAULT '',
+	image_ref TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	health TEXT NOT NULL DEFAULT '',
+	actor TEXT NOT NULL DEFAULT '',
+	run_url TEXT NOT NULL DEFAULT '',
+	prev_event_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_deploy_events_target ON deploy_events(owner, repo, branch, at);
 `
+
+// releaseColumns are the deploy_events columns added after the table first
+// shipped. CREATE TABLE IF NOT EXISTS leaves an existing table's columns
+// untouched, so each is added via ALTER TABLE on open; a "duplicate column"
+// error just means a current-schema DB already has it. Kept in one place so the
+// migration and the release schema never drift.
+var releaseColumns = []string{
+	`ALTER TABLE deploy_events ADD COLUMN commit_sha TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE deploy_events ADD COLUMN image_ref TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE deploy_events ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`,
+	`ALTER TABLE deploy_events ADD COLUMN health TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE deploy_events ADD COLUMN actor TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE deploy_events ADD COLUMN run_url TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE deploy_events ADD COLUMN prev_event_id INTEGER`,
+}
 
 // OpenSQLite opens (creating if needed) the SQLite database at path and applies
 // the schema. The caller owns the returned *sql.DB and must Close it.
@@ -64,6 +91,15 @@ func OpenSQLite(path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("add port column: %w", err)
 	}
+	// Migrate databases created before deploy_events carried release fields. Same
+	// idempotent ALTER pattern: a "duplicate column" error means a current-schema
+	// DB already has the column, anything else is a real failure.
+	for _, stmt := range releaseColumns {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			_ = db.Close()
+			return nil, fmt.Errorf("add release column: %w", err)
+		}
+	}
 	return db, nil
 }
 
@@ -76,7 +112,7 @@ type DeploymentSQL struct {
 
 var (
 	_ usecase.DeploymentStore   = (*DeploymentSQL)(nil)
-	_ usecase.DeployEventReader = (*DeploymentSQL)(nil)
+	_ usecase.ReleaseReader     = (*DeploymentSQL)(nil)
 	_ usecase.DeploymentDeleter = (*DeploymentSQL)(nil)
 )
 
@@ -139,11 +175,23 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 		return fmt.Errorf("upsert deployment: %w", err)
 	}
 
+	// Link this release to the target's previous one (NULL for the first), so
+	// release history is a chain rollback can walk. Computed inside the same
+	// transaction so a concurrent deploy cannot slot a release in between.
+	var prevID sql.NullInt64
+	if err := tx.QueryRow(`SELECT MAX(id) FROM deploy_events WHERE owner = ? AND repo = ? AND branch = ?`,
+		d.Owner, d.Repo, d.Branch).Scan(&prevID); err != nil {
+		return fmt.Errorf("find previous release: %w", err)
+	}
+
+	// A release is 'pending' until its GitHub Actions run completes; the terminal
+	// status and run_url are overlaid live from the run at read time. image_ref
+	// and health are provisioned but populated by later phases.
 	if _, err := tx.Exec(`INSERT INTO deploy_events
-		(owner, repo, branch, environment, server_id, app, at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		d.Owner, d.Repo, d.Branch, d.Environment, d.ServerID, d.App, now); err != nil {
-		return fmt.Errorf("record deploy event: %w", err)
+		(owner, repo, branch, environment, server_id, app, at, commit_sha, actor, status, image_ref, health, run_url, prev_event_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', '', '', '', ?)`,
+		d.Owner, d.Repo, d.Branch, d.Environment, d.ServerID, d.App, now, d.CommitSHA, d.Actor, prevID); err != nil {
+		return fmt.Errorf("record release: %w", err)
 	}
 	return tx.Commit()
 }
@@ -182,32 +230,40 @@ func (s *DeploymentSQL) DeleteByApp(app string) (bool, error) {
 	return affected > 0, nil
 }
 
-// DeployEvents returns a target's most recent deploys (newest first, capped to
-// limit) from the tracking log, plus the total number ever recorded.
-func (s *DeploymentSQL) DeployEvents(owner, repo, branch string, limit int) ([]usecase.DeployEvent, int, error) {
+// Releases returns a target's most recent releases (newest first, capped to
+// limit) from the append-only log, plus the total number ever recorded. Each
+// release carries the durable fields captured at deploy time (commit sha, actor,
+// environment, status, previous-release link); image_ref/health/run_url are
+// provisioned but populated by later phases.
+func (s *DeploymentSQL) Releases(owner, repo, branch string, limit int) ([]usecase.Release, int, error) {
 	var total int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM deploy_events WHERE owner = ? AND repo = ? AND branch = ?`,
 		owner, repo, branch).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count deploy events: %w", err)
+		return nil, 0, fmt.Errorf("count releases: %w", err)
 	}
 
-	rows, err := s.db.Query(`SELECT at, environment FROM deploy_events
+	rows, err := s.db.Query(`SELECT id, at, environment, commit_sha, image_ref, status, health, actor, run_url, prev_event_id
+		FROM deploy_events
 		WHERE owner = ? AND repo = ? AND branch = ?
 		ORDER BY at DESC, id DESC LIMIT ?`, owner, repo, branch, limit)
 	if err != nil {
-		return nil, 0, fmt.Errorf("query deploy events: %w", err)
+		return nil, 0, fmt.Errorf("query releases: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []usecase.DeployEvent
+	var out []usecase.Release
 	for rows.Next() {
-		var e usecase.DeployEvent
+		var r usecase.Release
 		var at string
-		if err := rows.Scan(&at, &e.Environment); err != nil {
-			return nil, 0, fmt.Errorf("scan deploy event: %w", err)
+		var prevID sql.NullInt64
+		if err := rows.Scan(&r.ID, &at, &r.Environment, &r.CommitSHA, &r.ImageRef, &r.Status, &r.Health, &r.Actor, &r.RunURL, &prevID); err != nil {
+			return nil, 0, fmt.Errorf("scan release: %w", err)
 		}
-		e.At, _ = time.Parse(time.RFC3339, at)
-		out = append(out, e)
+		r.At, _ = time.Parse(time.RFC3339, at)
+		if prevID.Valid {
+			r.PrevReleaseID = &prevID.Int64
+		}
+		out = append(out, r)
 	}
 	return out, total, rows.Err()
 }

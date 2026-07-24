@@ -30,6 +30,12 @@ type Deployment struct {
 	// publish), in which case the health check falls back to the domain.
 	Port      int       `json:"port"`
 	CreatedAt time.Time `json:"createdAt"`
+	// CommitSHA and Actor describe the release this deploy created: the branch
+	// head being deployed and the GitHub login that triggered it. They are
+	// recorded onto the appended release event by DeploymentStore.Save, not
+	// persisted on the deployments state row (List does not populate them).
+	CommitSHA string `json:"-"`
+	Actor     string `json:"-"`
 }
 
 // DeploymentStore persists configured deployments (a JSON file today). Save
@@ -112,22 +118,40 @@ type RunView struct {
 	CommitURL string `json:"commitUrl"` // the run's commit on github.com
 }
 
-// DeployEvent is one recorded deploy from the append-only tracking log.
-type DeployEvent struct {
-	At          time.Time
-	Environment string
+// Release is one recorded deploy from the append-only log, enriched into a
+// durable release record. CommitSHA and Actor are captured at deploy time;
+// Status starts "pending" and is overlaid live from the matching Actions run at
+// read time; ImageRef, Health and RunURL are provisioned but populated by later
+// phases. PrevReleaseID links to the target's previous release (nil for the
+// first), so release history is a chain rollback can walk.
+type Release struct {
+	ID            int64
+	At            time.Time
+	Environment   string
+	CommitSHA     string
+	ImageRef      string
+	Status        string
+	Health        string
+	Actor         string
+	RunURL        string
+	PrevReleaseID *int64
 }
 
-// DeployEventReader reads a target's deploy history from the tracking log: the
-// most recent events (newest first, capped to limit) and the total count.
-type DeployEventReader interface {
-	DeployEvents(owner, repo, branch string, limit int) (events []DeployEvent, total int, err error)
+// ReleaseReader reads a target's release history from the append-only log: the
+// most recent releases (newest first, capped to limit) and the total count.
+type ReleaseReader interface {
+	Releases(owner, repo, branch string, limit int) (releases []Release, total int, err error)
 }
 
-// EventView is one tracked deploy shaped for the UI timeline.
-type EventView struct {
+// ReleaseView is one release shaped for the UI timeline. The JSON key stays
+// "timeline" on the enclosing status for frontend compatibility.
+type ReleaseView struct {
 	When        string `json:"when"`
 	Environment string `json:"environment"`
+	SHA         string `json:"sha"`
+	Status      string `json:"status"`
+	Actor       string `json:"actor"`
+	RunURL      string `json:"runUrl"`
 }
 
 // DeploymentStatus is a configured deployment plus its recent run history,
@@ -147,13 +171,13 @@ type DeploymentStatus struct {
 	// Port is the deployment's primary published host port, used by the UI to
 	// scope custom domains to this environment (only domains whose upstream
 	// matches show on its card). Zero when no port was configured.
-	Port       int         `json:"port"`
-	ServerID   string      `json:"serverId"`
-	Status     string      `json:"status"` // live | idle | failing
-	LastDeploy string      `json:"lastDeploy"`
-	Runs       []RunView   `json:"runs"`
-	Deploys    int         `json:"deploys"`  // total times deployed (from the tracking log)
-	Timeline   []EventView `json:"timeline"` // recent deploys, newest first
+	Port       int           `json:"port"`
+	ServerID   string        `json:"serverId"`
+	Status     string        `json:"status"` // live | idle | failing
+	LastDeploy string        `json:"lastDeploy"`
+	Runs       []RunView     `json:"runs"`
+	Deploys    int           `json:"deploys"`  // total times deployed (from the tracking log)
+	Timeline   []ReleaseView `json:"timeline"` // recent releases, newest first
 }
 
 // monitorRunLimit caps recent runs; monitorEventLimit caps the deploy timeline.
@@ -177,7 +201,7 @@ const (
 // server, removing its committed deploy workflow, and forgetting its tracking.
 type MonitorService struct {
 	deployments DeploymentStore
-	events      DeployEventReader
+	releases    ReleaseReader
 	deleter     DeploymentDeleter
 	tokens      TokenStore
 	runs        WorkflowRunLister
@@ -199,11 +223,11 @@ type MonitorService struct {
 // scoped secrets); repoKeys removes the deploy key mountabo added to the repo.
 // Together they undo everything the deploy created on GitHub. The deleter then
 // forgets mountabo's tracking.
-func NewMonitorService(deployments DeploymentStore, events DeployEventReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, log *slog.Logger) *MonitorService {
+func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, log *slog.Logger) *MonitorService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &MonitorService{deployments: deployments, events: events, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, log: log}
+	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, log: log}
 }
 
 // Delete tears a deployment down by its app name: it stops and removes the app's
@@ -386,8 +410,8 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 			// Best-effort per deployment: a repo that's deleted, lacks
 			// permission, or has no runs yet still appears, just without runs.
 			runs, _ := s.runs.ListWorkflowRuns(gctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit)
-			events, total, _ := s.events.DeployEvents(d.Owner, d.Repo, d.Branch, monitorEventLimit)
-			out[i] = buildStatus(d, serversByID[d.ServerID], runs, events, total)
+			releases, total, _ := s.releases.Releases(d.Owner, d.Repo, d.Branch, monitorEventLimit)
+			out[i] = buildStatus(d, serversByID[d.ServerID], runs, releases, total)
 			return nil
 		})
 	}
@@ -399,7 +423,7 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 // first); the latest run sets the headline status and last-deploy time. server
 // is the deployment's target (zero value when it can't be resolved), used to
 // derive the live app URL.
-func buildStatus(d Deployment, server Server, runs []WorkflowRun, events []DeployEvent, deploys int) DeploymentStatus {
+func buildStatus(d Deployment, server Server, runs []WorkflowRun, releases []Release, deploys int) DeploymentStatus {
 	st := DeploymentStatus{
 		App:         d.App,
 		Repo:        d.Owner + "/" + d.Repo,
@@ -412,7 +436,15 @@ func buildStatus(d Deployment, server Server, runs []WorkflowRun, events []Deplo
 		LastDeploy:  "n/a",
 		Runs:        make([]RunView, 0, len(runs)),
 		Deploys:     deploys,
-		Timeline:    make([]EventView, 0, len(events)),
+		Timeline:    make([]ReleaseView, 0, len(releases)),
+	}
+	// Index runs by their head SHA so each stored release can be joined to the
+	// run that built it and pick up the run's live status and URL.
+	runBySHA := make(map[string]WorkflowRun, len(runs))
+	for _, r := range runs {
+		if r.SHA != "" {
+			runBySHA[r.SHA] = r
+		}
 	}
 	for i, r := range runs {
 		view := RunView{
@@ -430,10 +462,30 @@ func buildStatus(d Deployment, server Server, runs []WorkflowRun, events []Deplo
 			st.LastDeploy = view.When
 		}
 	}
-	for _, e := range events {
-		st.Timeline = append(st.Timeline, EventView{When: relativeTime(e.At), Environment: e.Environment})
+	for _, rel := range releases {
+		st.Timeline = append(st.Timeline, releaseView(rel, runBySHA))
 	}
 	return st
+}
+
+// releaseView shapes a stored release for the UI, overlaying the live status and
+// run URL from the Actions run that built it (matched by commit SHA). A release
+// with no matching run yet (still pending, or its run aged out of the recent
+// list) falls back to the durable stored status.
+func releaseView(rel Release, runBySHA map[string]WorkflowRun) ReleaseView {
+	status, runURL := rel.Status, rel.RunURL
+	if run, ok := runBySHA[rel.CommitSHA]; ok && rel.CommitSHA != "" {
+		status = runStatus(run)
+		runURL = run.HTMLURL
+	}
+	return ReleaseView{
+		When:        relativeTime(rel.At),
+		Environment: rel.Environment,
+		SHA:         shortSHA(rel.CommitSHA),
+		Status:      status,
+		Actor:       rel.Actor,
+		RunURL:      runURL,
+	}
 }
 
 // commitURL is the github.com page for a run's commit, or "" when the sha is

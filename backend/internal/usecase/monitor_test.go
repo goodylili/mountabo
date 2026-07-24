@@ -15,13 +15,13 @@ func (f fakeRunLister) ListWorkflowRuns(_ context.Context, _ Token, owner, repo,
 	return f.runs[owner+"/"+repo], nil
 }
 
-type fakeEventReader struct {
-	events []DeployEvent
-	total  int
+type fakeReleaseReader struct {
+	releases []Release
+	total    int
 }
 
-func (f fakeEventReader) DeployEvents(_, _, _ string, _ int) ([]DeployEvent, int, error) {
-	return f.events, f.total, nil
+func (f fakeReleaseReader) Releases(_, _, _ string, _ int) ([]Release, int, error) {
+	return f.releases, f.total, nil
 }
 
 // fakeContainerTeardown records the apps it was asked to remove, so a test can
@@ -81,13 +81,16 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 			{SHA: "0000000", Title: "older", Status: "completed", Conclusion: "failure", CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
 		},
 	}}
-	events := fakeEventReader{total: 3, events: []DeployEvent{
-		{At: now.Add(-time.Minute), Environment: "main"},
-		{At: now.Add(-time.Hour), Environment: "main"},
+	// Releases are stored as pending; the read path overlays live status/run URL
+	// from the run that built each (matched by commit SHA). The first matches the
+	// successful run; the second has no matching run and keeps its stored status.
+	releases := fakeReleaseReader{total: 3, releases: []Release{
+		{At: now.Add(-time.Minute), Environment: "main", CommitSHA: "abcdef1234", Status: "pending", Actor: "octocat"},
+		{At: now.Add(-time.Hour), Environment: "main", CommitSHA: "deadbeef", Status: "pending"},
 	}}
 	servers := newMemServerStore()
 	_ = servers.Save(Server{ID: "s1", IP: "203.0.113.7"})
-	svc := NewMonitorService(deps, events, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs, servers, newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(deps, releases, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, runs, servers, newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 
 	got, err := svc.History(context.Background())
 	if err != nil {
@@ -118,6 +121,14 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 	if len(d.Timeline) != 2 || d.Timeline[0].Environment != "main" {
 		t.Errorf("timeline wrong: %+v", d.Timeline)
 	}
+	// First release joins the successful run by SHA: live status + actor + short SHA.
+	if d.Timeline[0].Status != "success" || d.Timeline[0].SHA != "abcdef1" || d.Timeline[0].Actor != "octocat" {
+		t.Errorf("release[0] overlay wrong: %+v", d.Timeline[0])
+	}
+	// Second release has no matching run, so it keeps its stored pending status.
+	if d.Timeline[1].Status != "pending" {
+		t.Errorf("release[1] status = %q, want pending", d.Timeline[1].Status)
+	}
 	if len(d.Runs) != 2 {
 		t.Fatalf("want 2 runs, got %d", len(d.Runs))
 	}
@@ -130,7 +141,7 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 }
 
 func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
-	svc := NewMonitorService(&fakeDeploymentStore{}, fakeEventReader{}, &fakeDeploymentStore{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(&fakeDeploymentStore{}, fakeReleaseReader{}, &fakeDeploymentStore{}, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 	got, err := svc.History(context.Background())
 	if err != nil {
 		t.Fatalf("History: %v", err)
@@ -142,7 +153,7 @@ func TestMonitorHistory_EmptyWithoutDeployments(t *testing.T) {
 
 func TestMonitorHistory_NotConnected(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{{Owner: "a", Repo: "r", Branch: "main"}}}
-	svc := NewMonitorService(deps, fakeEventReader{}, deps, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadErr: ErrNotConnected}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 	if _, err := svc.History(context.Background()); !errors.Is(err, ErrNotConnected) {
 		t.Fatalf("want ErrNotConnected, got %v", err)
 	}
@@ -158,7 +169,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY-PEM")
 	teardown := &fakeContainerTeardown{}
 	files := &fakeRepoFileDeleter{}
-	svc := NewMonitorService(deps, fakeEventReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 
 	if err := svc.Delete(context.Background(), "shop"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -186,7 +197,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 
 func TestMonitorDelete_NotFound(t *testing.T) {
 	deps := &fakeDeploymentStore{}
-	svc := NewMonitorService(deps, fakeEventReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 	if err := svc.Delete(context.Background(), "missing"); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("want ErrDeploymentNotFound, got %v", err)
 	}
@@ -204,7 +215,7 @@ func TestMonitorDelete_RemovesRecordEvenWhenTeardownFails(t *testing.T) {
 	// still be removed so the user is never stuck.
 	teardown := &fakeContainerTeardown{err: errors.New("ssh down")}
 	files := &fakeRepoFileDeleter{err: errors.New("github down")}
-	svc := NewMonitorService(deps, fakeEventReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
+	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, nil)
 
 	if err := svc.Delete(context.Background(), "shop"); err != nil {
 		t.Fatalf("Delete should succeed despite soft teardown failures, got %v", err)
