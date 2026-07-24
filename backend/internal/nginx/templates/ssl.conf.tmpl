@@ -1,9 +1,8 @@
 # Managed by mountabo. HTTPS virtual host for {{.ServerNames}}.
 # Terminates TLS with the Let's Encrypt certificate and proxies to the local app.
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name {{.ServerNames}};
 
     ssl_certificate     /etc/letsencrypt/live/{{.Domain}}/fullchain.pem;

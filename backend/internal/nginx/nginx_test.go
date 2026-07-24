@@ -37,7 +37,7 @@ func TestTLSConfig_TerminatesAndProxies(t *testing.T) {
 		t.Fatalf("TLSConfig: %v", err)
 	}
 	for _, want := range []string{
-		"listen 443 ssl;",
+		"listen 443 ssl http2;",
 		"ssl_certificate     /etc/letsencrypt/live/app.example.com/fullchain.pem;",
 		"proxy_pass http://127.0.0.1:3000;",
 	} {

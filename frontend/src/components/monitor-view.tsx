@@ -800,8 +800,8 @@ function ExpandedCard({
             <p className="text-[14px] text-muted">no runs recorded yet.</p>
           ) : (
             <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
-              {d.runs.map((r) => (
-                <RunRow key={r.sha} run={r} />
+              {d.runs.map((r, i) => (
+                <RunRow key={`${r.runUrl || r.sha}:${i}`} run={r} />
               ))}
             </ul>
           ))}
@@ -1471,9 +1471,9 @@ function Summary({
 function RunStrip({ runs }: { runs: DeployRun[] }) {
   return (
     <span className="hidden items-center gap-1 md:flex" title="recent deploys">
-      {runs.map((r) => (
+      {runs.map((r, i) => (
         <span
-          key={r.sha}
+          key={`${r.runUrl || r.sha}:${i}`}
           className={`h-5 w-1.5 rounded-sm ${runColor[r.status]} ${
             r.status === "running" ? "animate-pulse" : ""
           }`}

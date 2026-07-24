@@ -16,16 +16,16 @@ import (
 const maxJobLogBytes = 2 << 20 // 2 MiB
 
 var (
-	_ usecase.WorkflowRunLister  = (*Client)(nil)
-	_ usecase.WorkflowJobLister  = (*Client)(nil)
-	_ usecase.WorkflowDispatcher = (*Client)(nil)
+	_ usecase.WorkflowRunLister = (*Client)(nil)
+	_ usecase.WorkflowJobLister = (*Client)(nil)
 )
 
 // DispatchWorkflow triggers a workflow_dispatch event for workflowFile on the
-// given ref, so a configure-and-deploy actually runs without waiting for a
-// push. GitHub requires the workflow file to be on the repo's default branch
-// for this to succeed (a known quirk); the caller treats failure as advisory
-// and falls back to telling the operator to push.
+// given ref. The deploy flow no longer calls this (committing the workflow file
+// fires the branch push trigger, so an extra dispatch would double the run); it
+// is kept for manually re-running or, later, redeploying a workflow. GitHub
+// requires the workflow file to be on the repo's default branch for this to
+// succeed (a known quirk).
 func (c *Client) DispatchWorkflow(ctx context.Context, t usecase.Token, owner, repo, workflowFile, ref string) error {
 	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
 	if err != nil {
