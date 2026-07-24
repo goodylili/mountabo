@@ -49,6 +49,23 @@ export const servers: Server[] = [];
 
 export type RunStatus = "success" | "failed" | "running";
 
+// ReleaseStatus is a release's state in the deploy log. "pending" is a release
+// recorded at deploy time whose Actions run has not completed (or aged out), so
+// no live run status has been overlaid yet.
+export type ReleaseStatus = RunStatus | "pending";
+
+// Release is one entry in a deployment's release history. sha/actor are captured
+// durably at deploy time; status/runUrl are overlaid live from the matching
+// Actions run when available.
+export type Release = {
+  when: string;
+  environment: string;
+  sha: string;
+  status: ReleaseStatus;
+  actor: string;
+  runUrl: string;
+};
+
 export type DeployRun = {
   sha: string;
   message: string;
@@ -80,9 +97,10 @@ export type Deployment = {
   metrics: { cpu: string; mem: string; ping: string };
   runs: DeployRun[];
   // Tracking (from the SQLite deploy-event log): total times deployed + a recent
-  // timeline (newest first).
+  // release history (newest first). The field keeps the name "timeline" to match
+  // the backend payload key.
   deploys?: number;
-  timeline?: { when: string; environment: string }[];
+  timeline?: Release[];
 };
 
 // What's currently running where, assembled from GitHub Actions run history +
