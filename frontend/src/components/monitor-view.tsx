@@ -19,7 +19,7 @@ import {
   Terminal,
   Trash,
 } from "@/components/icons";
-import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
+import type { Deployment, DeployRun, Release, ReleaseStatus, RunStatus } from "@/lib/data";
 import type { Domain, ServerView } from "@/lib/servers";
 import {
   type ServerMetrics,
@@ -41,7 +41,7 @@ import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetc
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
-import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
+import { type AppHealth, clearDeployLock, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
 import { getRepoBranches } from "@/lib/branches";
 import { type UptimeKumaAdmin, fetchUptimeKumaAdmin, resetUptimeKumaAdmin } from "@/lib/uptime-kuma-admin";
 
@@ -49,6 +49,20 @@ const runColor: Record<RunStatus, string> = {
   success: "bg-blue",
   failed: "bg-red-400",
   running: "bg-lime",
+};
+
+// Release status extends run status with "pending" (recorded at deploy time, no
+// completed run yet). Dot colours and Badge tones reuse the run palette.
+const releaseColor: Record<ReleaseStatus, string> = {
+  ...runColor,
+  pending: "bg-muted",
+};
+
+const releaseTone: Record<ReleaseStatus, "blue" | "red" | "lime" | "gray"> = {
+  success: "blue",
+  failed: "red",
+  running: "lime",
+  pending: "gray",
 };
 
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
@@ -83,6 +97,7 @@ export function MonitorView({
   // The delete confirmation gate (the open deployment to forget), and the set of
   // apps already dropped locally so their cards disappear immediately on delete.
   const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
+  const [confirmClearLock, setConfirmClearLock] = useState<Deployment | null>(null);
   const [deletedApps, setDeletedApps] = useState<Set<string>>(new Set());
   const visibleDeployments = deployments.filter((d) => !deletedApps.has(d.app));
 
@@ -103,6 +118,15 @@ export function MonitorView({
     const ok = await deleteDeployment(app);
     if (!ok) return;
     setDeletedApps((prev) => new Set(prev).add(app));
+    startRefresh(() => router.refresh());
+  }
+
+  // confirmLockClear force-releases a stuck deploy lock, then refreshes to
+  // re-pull authoritative lock state. Runs from an event handler.
+  async function confirmLockClear(app: string) {
+    setConfirmClearLock(null);
+    const ok = await clearDeployLock(app);
+    if (!ok) return;
     startRefresh(() => router.refresh());
   }
 
@@ -277,6 +301,7 @@ export function MonitorView({
                     </Badge>
                     <HealthPill health={health[d.app]} />
                     {latest && <LatestRunPill status={latest.status} />}
+                    {d.locked && <LockPill since={d.lockedSince} />}
                   </span>
                   <span className="mt-1.5 block truncate text-[13px] text-muted">
                     {d.repo} · {d.branch} · {server?.name ?? d.serverId}
@@ -302,6 +327,7 @@ export function MonitorView({
                     setConfirmDomain({ server, mode: "remove", host })
                   }
                   onDelete={() => setConfirmDelete(d)}
+                  onClearLock={() => setConfirmClearLock(d)}
                 />
               )}
             </section>
@@ -432,6 +458,29 @@ export function MonitorView({
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+
+      {/* Clear a stuck deploy lock: a recovery escape hatch, not destructive. */}
+      {confirmClearLock && (
+        <ConfirmAction
+          title={`clear lock on ${confirmClearLock.app}`}
+          subtitle="allow a new deploy to start"
+          summary={
+            <>
+              this force-releases the deploy lock on <span className="text-cream">{confirmClearLock.app}</span>{" "}
+              so a new deploy can start. only do this if a previous deploy wedged and left the target
+              locked — clearing it while a deploy is genuinely running could let two deploys race.
+            </>
+          }
+          stepsLabel="what clearing does"
+          steps={[
+            `release mountabo's in-process deploy lock for ${confirmClearLock.app}`,
+            "does not touch the server, the running app, or GitHub — it only frees the local lock",
+          ]}
+          confirmLabel="clear stuck lock"
+          onConfirm={() => void confirmLockClear(confirmClearLock.app)}
+          onCancel={() => setConfirmClearLock(null)}
+        />
+      )}
     </main>
   );
 }
@@ -458,6 +507,16 @@ function HealthPill({ health }: { health: AppHealth | null | undefined }) {
   return (
     <Badge tone="red" dot>
       unhealthy{health.status ? ` · ${health.status}` : ""}
+    </Badge>
+  );
+}
+
+// LockPill shows on a card while a deploy to this target is in flight (the
+// backend's per-target deploy lock is held), with how long it has been held.
+function LockPill({ since }: { since?: string }) {
+  return (
+    <Badge tone="lime" dot>
+      deploying{since ? ` · ${since}` : ""}
     </Badge>
   );
 }
@@ -519,6 +578,7 @@ function ExpandedCard({
   onAddDomain,
   onRemoveDomain,
   onDelete,
+  onClearLock,
 }: {
   deployment: Deployment;
   server?: ServerView;
@@ -527,6 +587,7 @@ function ExpandedCard({
   onAddDomain: (server: ServerView, value: DomainFormValue) => void;
   onRemoveDomain: (server: ServerView, host: string) => void;
   onDelete: () => void;
+  onClearLock: () => void;
 }) {
   const latest = d.runs[0];
   const [owner, repo] = splitRepo(d.repo);
@@ -585,7 +646,7 @@ function ExpandedCard({
       ? [{ key: "domains" as const, label: `custom domains (${envDomains.length})` }]
       : []),
     ...(timelineCount > 0
-      ? [{ key: "timeline" as const, label: `deploy timeline (${d.deploys ?? 0})` }]
+      ? [{ key: "timeline" as const, label: `releases (${d.deploys ?? 0})` }]
       : []),
   ];
 
@@ -786,8 +847,8 @@ function ExpandedCard({
             <p className="text-[14px] text-muted">no runs recorded yet.</p>
           ) : (
             <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
-              {d.runs.map((r) => (
-                <RunRow key={r.sha} run={r} />
+              {d.runs.map((r, i) => (
+                <RunRow key={`${r.runUrl || r.sha}:${i}`} run={r} />
               ))}
             </ul>
           ))}
@@ -818,17 +879,35 @@ function ExpandedCard({
           </div>
         )}
 
-        {/* deploy timeline */}
+        {/* release history */}
         {tab === "timeline" && timelineCount > 0 && (
-          <ul className="space-y-3 text-[14px]">
-            {(d.timeline ?? []).map((e, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                <span className="text-body">configured for {e.environment}</span>
-                <span className="ml-auto text-muted">{e.when}</span>
-              </li>
+          <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+            {(d.timeline ?? []).map((rel, i) => (
+              <ReleaseRow key={i} release={rel} />
             ))}
           </ul>
+        )}
+
+        {/* stuck-lock recovery: only shown while the deploy lock is held. Clears
+            the in-process lock so a new deploy can start if a previous one wedged. */}
+        {d.locked && (
+          <div className="mt-2 rounded-xl border border-line bg-surface/40 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[15px] font-medium text-cream">a deploy is in progress</p>
+                <p className="mt-1 max-w-xl text-[13px] leading-6 text-muted">
+                  {d.app} is locked{d.lockedSince ? ` (since ${d.lockedSince})` : ""} while a deploy runs.
+                  if a deploy wedged and left it stuck, clear the lock to allow a new deploy.
+                </p>
+              </div>
+              <button
+                onClick={onClearLock}
+                className="flex shrink-0 items-center gap-2 rounded-md border border-line px-4 py-2 text-[13px] font-medium text-body transition-colors hover:bg-surface"
+              >
+                clear stuck lock
+              </button>
+            </div>
+          </div>
         )}
 
         {/* danger zone: deleting tears the deployment down, so it gets its own
@@ -1461,9 +1540,9 @@ function Summary({
 function RunStrip({ runs }: { runs: DeployRun[] }) {
   return (
     <span className="hidden items-center gap-1 md:flex" title="recent deploys">
-      {runs.map((r) => (
+      {runs.map((r, i) => (
         <span
-          key={r.sha}
+          key={`${r.runUrl || r.sha}:${i}`}
           className={`h-5 w-1.5 rounded-sm ${runColor[r.status]} ${
             r.status === "running" ? "animate-pulse" : ""
           }`}
@@ -1545,6 +1624,43 @@ function RunRow({ run }: { run: DeployRun }) {
           rel="noopener noreferrer"
           className="shrink-0 text-muted transition-colors hover:text-cream"
           aria-label={`open run ${run.sha} on github`}
+        >
+          <ExternalLink />
+        </a>
+      ) : (
+        <span className="w-3.5 shrink-0" />
+      )}
+    </li>
+  );
+}
+
+// ReleaseRow renders one entry of a deployment's release history: its status
+// (overlaid live from the matching Actions run when available), the deployed
+// commit, the environment, who triggered it, and when. Read-only; rollback
+// actions come in a later phase.
+function ReleaseRow({ release }: { release: Release }) {
+  const hasSHA = release.sha && release.sha !== "n/a";
+  return (
+    <li className="flex items-center gap-3 px-5 py-3 text-[13px]">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${releaseColor[release.status]}`} />
+      {hasSHA ? (
+        <code className="shrink-0 font-mono text-cream">{release.sha}</code>
+      ) : (
+        <span className="w-14 shrink-0 text-muted">n/a</span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-body">{release.environment}</span>
+      <Badge tone={releaseTone[release.status]}>{release.status}</Badge>
+      {release.actor && (
+        <span className="hidden text-muted sm:inline">{release.actor}</span>
+      )}
+      <span className="w-16 text-right text-muted">{release.when}</span>
+      {release.runUrl ? (
+        <a
+          href={release.runUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 text-muted transition-colors hover:text-cream"
+          aria-label={`open the run for release ${release.sha} on github`}
         >
           <ExternalLink />
         </a>

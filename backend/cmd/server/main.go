@@ -102,10 +102,14 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 	deploymentStore := repository.NewDeploymentSQL(db)
+	// Shared in-process deploy lock: the deploy path acquires it to serialize
+	// deploys per target; the monitor reads it to surface lock state and clears it
+	// for the "clear stuck lock" recovery action.
+	deployLocker := usecase.NewDeployLocker()
 	// The deploy flow also mints a per-repo read-only deploy key: ssh generates
 	// the keypair and installs the private half on the server; github registers
 	// the public half on the repo.
-	deploySvc := usecase.NewDeployService(serverStore, keyStore, keyStore, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient, ghClient)
+	deploySvc := usecase.NewDeployService(serverStore, keyStore, keyStore, ghClient, ghClient, ghClient, deploymentStore, sshClient, ghClient, sshClient, ghClient, ghClient, deployLocker)
 	deployHandler := httpadapter.NewDeployHandler(deploySvc, logger)
 
 	// Compose the monitor: configured deployments (SQLite store) enriched with
@@ -115,7 +119,7 @@ func run() error {
 	// on its server (keychain key), github removes the committed deploy workflow +
 	// deploy.sh from the repo (keychain token), and the SQLite store then forgets
 	// its tracking. Teardown is best-effort and logged.
-	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, deploymentStore, keyStore, ghClient, serverStore, keyStore, sshClient, ghClient, ghClient, ghClient, logger)
+	monitorSvc := usecase.NewMonitorService(deploymentStore, deploymentStore, deploymentStore, keyStore, ghClient, serverStore, keyStore, sshClient, ghClient, ghClient, ghClient, deployLocker, logger)
 	// App health: probe whether a deployed app is responding by curling it from
 	// its own server over SSH (the same ssh.Client + server store + keychain key
 	// the metrics/logs services use), so the card shows real up/down status.

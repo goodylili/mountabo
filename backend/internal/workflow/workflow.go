@@ -120,6 +120,13 @@ on:
       - %[2]s
   workflow_dispatch:
 
+# Serialize deploys to this target: while a run is in progress, a newer run
+# queues behind it rather than cancelling it, so a half-applied deploy is never
+# interrupted. Group is per app+branch to match mountabo's local deploy lock.
+concurrency:
+  group: mountabo-deploy-%[1]s-%[2]s
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

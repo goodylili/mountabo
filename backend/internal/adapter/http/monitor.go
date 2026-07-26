@@ -92,6 +92,17 @@ func (h *MonitorHandler) Delete(w nethttp.ResponseWriter, r *nethttp.Request) {
 	w.WriteHeader(nethttp.StatusNoContent)
 }
 
+// ClearLock force-releases the deploy lock for the app named in the path (the
+// "clear stuck lock" recovery action). It is idempotent: clearing an app that is
+// not locked still returns 204, so the UI never has to special-case it.
+func (h *MonitorHandler) ClearLock(w nethttp.ResponseWriter, r *nethttp.Request) {
+	app := r.PathValue("app")
+	if cleared := h.svc.ClearLock(app); cleared {
+		h.log.Info("cleared stuck deploy lock", "app", app)
+	}
+	w.WriteHeader(nethttp.StatusNoContent)
+}
+
 func (h *MonitorHandler) writeError(w nethttp.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

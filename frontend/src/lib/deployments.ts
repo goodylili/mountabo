@@ -1,5 +1,5 @@
 import { backendURL } from "@/lib/servers";
-import type { Deployment, RunStatus } from "@/lib/data";
+import type { Deployment, ReleaseStatus, RunStatus } from "@/lib/data";
 
 type RunResponse = {
   sha: string;
@@ -11,7 +11,17 @@ type RunResponse = {
   commitUrl: string;
 };
 
-type EventResponse = { when: string; environment: string };
+// EventResponse is one release from the backend's durable log. status/runUrl are
+// overlaid live from the matching Actions run at read time; sha/actor are the
+// durable values captured at deploy time. The payload key stays "timeline".
+type EventResponse = {
+  when: string;
+  environment: string;
+  sha: string;
+  status: string;
+  actor: string;
+  runUrl: string;
+};
 
 type DeploymentResponse = {
   app: string;
@@ -26,6 +36,8 @@ type DeploymentResponse = {
   runs: RunResponse[];
   deploys: number;
   timeline: EventResponse[];
+  locked?: boolean;
+  lockedSince?: string;
 };
 
 // getDeployments reads deploy history from the Go backend: the configured
@@ -60,7 +72,16 @@ export async function getDeployments(): Promise<Deployment[]> {
         commitUrl: r.commitUrl ?? "",
       })),
       deploys: d.deploys ?? 0,
-      timeline: (d.timeline ?? []).map((e) => ({ when: e.when, environment: e.environment })),
+      timeline: (d.timeline ?? []).map((e) => ({
+        when: e.when,
+        environment: e.environment,
+        sha: e.sha ?? "",
+        status: (["success", "failed", "running", "pending"].includes(e.status) ? e.status : "pending") as ReleaseStatus,
+        actor: e.actor ?? "",
+        runUrl: e.runUrl ?? "",
+      })),
+      locked: d.locked ?? false,
+      lockedSince: d.lockedSince ?? "",
     }));
   } catch {
     return [];

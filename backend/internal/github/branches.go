@@ -8,7 +8,10 @@ import (
 	gogithub "github.com/google/go-github/v88/github"
 )
 
-var _ usecase.RepoBranchLister = (*Client)(nil)
+var (
+	_ usecase.RepoBranchLister = (*Client)(nil)
+	_ usecase.RefResolver      = (*Client)(nil)
+)
 
 // ListBranches pages through every branch on owner/repo and returns their
 // names in GitHub's order (alphabetical). The page size matches the API's max
@@ -37,4 +40,20 @@ func (c *Client) ListBranches(ctx context.Context, t usecase.Token, owner, repo 
 		opts.Page = resp.NextPage
 	}
 	return out, nil
+}
+
+// HeadSHA returns the head commit SHA of owner/repo's branch, so a deploy can
+// record the exact commit it releases. The single-branch GET resolves the tip
+// without paging the whole branch list.
+func (c *Client) HeadSHA(ctx context.Context, t usecase.Token, owner, repo, branch string) (string, error) {
+	api, err := gogithub.NewClient(gogithub.WithAuthToken(t.AccessToken))
+	if err != nil {
+		return "", fmt.Errorf("build github client: %w", err)
+	}
+
+	b, _, err := api.Repositories.GetBranch(ctx, owner, repo, branch, 0)
+	if err != nil {
+		return "", fmt.Errorf("get branch %s for %s/%s: %w", branch, owner, repo, err)
+	}
+	return b.GetCommit().GetSHA(), nil
 }

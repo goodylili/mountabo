@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -16,6 +17,10 @@ import (
 // underscores, not starting with a digit. Env var keys must satisfy this before
 // their values can be stored as secrets.
 var secretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ErrDeployInProgress is returned when a deploy to a target is rejected because
+// another deploy to the same target (app) is already in flight.
+var ErrDeployInProgress = errors.New("deploy already in progress for this target")
 
 // DeployPort is one published port the operator configured. EnvVar/Value back a
 // compose stack's host port; Value/Container back a `docker run -p` mapping.
@@ -102,20 +107,17 @@ type RepoDeployKeyManager interface {
 	AddDeployKey(ctx context.Context, t Token, owner, repo, title, publicKey string, readOnly bool) (int64, error)
 }
 
-// WorkflowDispatcher triggers the deploy workflow on a branch (workflow_dispatch)
-// so a configure-and-deploy actually runs the deploy without waiting for the
-// next push. Best-effort: dispatch can fail when the workflow file is not yet
-// on the repo's default branch (GitHub requires this for new workflows), in
-// which case the operator pushes or runs the workflow manually. A dispatch
-// failure must not undo the rest of the deploy.
-type WorkflowDispatcher interface {
-	DispatchWorkflow(ctx context.Context, t Token, owner, repo, workflowFile, ref string) error
-}
-
 // DeployKeyInstaller writes a repo's deploy private key onto the server (in the
 // deploy user's ~/.ssh) over SSH, streaming progress to out.
 type DeployKeyInstaller interface {
 	InstallDeployKey(ctx context.Context, t SSHTarget, keyName, privateKey string, out io.Writer) error
+}
+
+// RefResolver reports the head commit SHA of a repo branch, so a deploy can
+// record the exact commit it is releasing. Best-effort at deploy time: a failure
+// leaves the release's commit unset rather than blocking the deploy.
+type RefResolver interface {
+	HeadSHA(ctx context.Context, t Token, owner, repo, branch string) (string, error)
 }
 
 // DeployService configures continuous deployment of a repo to a server: it
@@ -134,12 +136,17 @@ type DeployService struct {
 	keys       KeyMaker
 	deployKeys RepoDeployKeyManager
 	installer  DeployKeyInstaller
-	dispatcher WorkflowDispatcher
+	refs       RefResolver
+	accounts   AccountFetcher
+	locker     *DeployLocker
 }
 
-// NewDeployService wires the service to its ports.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, dispatcher WorkflowDispatcher) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, dispatcher: dispatcher}
+// NewDeployService wires the service to its ports. refs and accounts enrich the
+// recorded release with the deployed commit and the triggering GitHub login;
+// both are read best-effort and never block a deploy. locker serializes deploys
+// per target so two concurrent deploys never race on the same repo files.
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, refs RefResolver, accounts AccountFetcher, locker *DeployLocker) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, refs: refs, accounts: accounts, locker: locker}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -180,6 +187,16 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 	if server.Status != StatusReady {
 		return fmt.Errorf("server must be set up before deploying")
 	}
+
+	// Serialize deploys to the same target so two concurrent runs (a double
+	// click, two tabs, a reconnecting client) never race on the same repo files
+	// and secrets. Held only for this local operation; released on return, so a
+	// client disconnect (ctx cancel) also frees it. A wedged deploy is recovered
+	// via the "clear stuck lock" action.
+	if !s.locker.TryAcquire(in.App) {
+		return ErrDeployInProgress
+	}
+	defer s.locker.Release(in.App)
 
 	token, err := s.tokens.Load()
 	if err != nil {
@@ -248,6 +265,20 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("set environment secrets: %w", err)
 	}
 
+	// Resolve the release's commit and actor for the durable record. Both are
+	// best-effort: a failure leaves the field empty and only notes it, since the
+	// deploy has already succeeded and must not fail on tracking metadata.
+	commitSHA, err := s.refs.HeadSHA(ctx, token, in.Owner, in.Repo, in.Branch)
+	if err != nil {
+		progress(out, "note: could not resolve commit for %s (release will omit it): %v", in.Branch, err)
+	}
+	var actor string
+	if account, aerr := s.accounts.Account(ctx, token); aerr != nil {
+		progress(out, "note: could not resolve deploy actor (release will omit it): %v", aerr)
+	} else {
+		actor = account.Login
+	}
+
 	// Record the deployment so the monitor can show its history. A failure here
 	// must not fail the deploy, which already succeeded, so it is only noted.
 	record := Deployment{
@@ -261,22 +292,18 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		WorkflowFile: fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch),
 		Port:         primaryPort(in.Ports),
 		CreatedAt:    time.Now().UTC(),
+		CommitSHA:    commitSHA,
+		Actor:        actor,
 	}
 	if err := s.history.Save(record); err != nil {
 		progress(out, "note: deploy succeeded but recording history failed: %v", err)
 	}
 
-	// Trigger the deploy immediately via workflow_dispatch so the operator does
-	// not have to push to see the new config run. Best-effort: GitHub requires
-	// the workflow file to be on the default branch for dispatch to work, which
-	// is not always the case for first deploys to a non-default branch; on
-	// failure we just say "push to trigger" instead.
-	wfFile := fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch)
-	if dispErr := s.dispatcher.DispatchWorkflow(ctx, token, in.Owner, in.Repo, wfFile, in.Branch); dispErr != nil {
-		progress(out, "deploy configured, push to %s to trigger a %s deploy (auto-trigger skipped: %v)", in.Branch, cfg.Strategy, dispErr)
-	} else {
-		progress(out, "deploy configured and triggered, watch the run on %s", in.Branch)
-	}
+	// Committing the workflow file to in.Branch above fires its `on: push`
+	// trigger, which runs the deploy — so no explicit workflow_dispatch is needed
+	// (that would produce a second, duplicate run). workflow_dispatch stays in the
+	// generated workflow for manual re-runs from GitHub.
+	progress(out, "deploy configured, watch the %s run on %s", cfg.Strategy, in.Branch)
 	return nil
 }
 
