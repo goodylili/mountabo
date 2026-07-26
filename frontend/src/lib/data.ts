@@ -101,6 +101,11 @@ export type Deployment = {
   // the backend payload key.
   deploys?: number;
   timeline?: Release[];
+  // locked is true while a deploy to this target is in flight (the backend's
+  // in-process deploy lock is held); lockedSince is a relative time like "2m ago".
+  // The card shows a lock indicator and offers a "clear stuck lock" action.
+  locked?: boolean;
+  lockedSince?: string;
 };
 
 // What's currently running where, assembled from GitHub Actions run history +

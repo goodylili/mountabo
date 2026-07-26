@@ -26,6 +26,7 @@ import nethttp "net/http"
 //	POST   /api/servers/{id}/deploy  configure deployment of a repo, streaming (SSE)
 //	GET    /api/deployments          deploy history (configured deployments + their Actions runs)
 //	GET    /api/deployments/{app}/health  probe whether the deployed app is responding (curl over SSH), reporting up/down + HTTP status
+//	DELETE /api/deployments/{app}/lock  force-release a stuck deploy lock for an app (recovery)
 //	DELETE /api/deployments/{app}     forget mountabo's tracking of a deployment (its record + deploy history); does not stop the container or remove the workflow
 //	POST   /api/servers/{id}/exec    run one shell command on the server (over SSH), returns output + exit code
 //	POST   /api/ai/command           suggest a shell command for a plain-English request (Claude), advisory only
@@ -66,6 +67,7 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)
 	mux.HandleFunc("GET /api/deployments", mon.Deployments)
 	mux.HandleFunc("GET /api/deployments/{app}/health", mon.Health)
+	mux.HandleFunc("DELETE /api/deployments/{app}/lock", mon.ClearLock)
 	mux.HandleFunc("DELETE /api/deployments/{app}", mon.Delete)
 
 	// Terminal page: run one command on a server, and ask the AI helper for a

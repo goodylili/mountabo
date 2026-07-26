@@ -71,3 +71,15 @@ func TestWorkflow_Triggers(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkflow_ConcurrencySerializes guards that overlapping runs for the same
+// target serialize (queue) rather than cancel — a per-(app,branch) group with
+// cancel-in-progress:false. Never interrupt a half-applied deploy.
+func TestWorkflow_ConcurrencySerializes(t *testing.T) {
+	w := Workflow(base())
+	for _, want := range []string{"concurrency:", "group: mountabo-deploy-shop-main", "cancel-in-progress: false"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("workflow concurrency missing %q", want)
+		}
+	}
+}

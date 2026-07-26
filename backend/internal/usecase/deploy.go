@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -16,6 +17,10 @@ import (
 // underscores, not starting with a digit. Env var keys must satisfy this before
 // their values can be stored as secrets.
 var secretName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ErrDeployInProgress is returned when a deploy to a target is rejected because
+// another deploy to the same target (app) is already in flight.
+var ErrDeployInProgress = errors.New("deploy already in progress for this target")
 
 // DeployPort is one published port the operator configured. EnvVar/Value back a
 // compose stack's host port; Value/Container back a `docker run -p` mapping.
@@ -133,13 +138,15 @@ type DeployService struct {
 	installer  DeployKeyInstaller
 	refs       RefResolver
 	accounts   AccountFetcher
+	locker     *DeployLocker
 }
 
 // NewDeployService wires the service to its ports. refs and accounts enrich the
 // recorded release with the deployed commit and the triggering GitHub login;
-// both are read best-effort and never block a deploy.
-func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, refs RefResolver, accounts AccountFetcher) *DeployService {
-	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, refs: refs, accounts: accounts}
+// both are read best-effort and never block a deploy. locker serializes deploys
+// per target so two concurrent deploys never race on the same repo files.
+func NewDeployService(servers ServerStore, vault SecretVault, tokens TokenStore, repo RepoWriter, envs EnvManager, secrets EnvSecretSetter, history DeploymentStore, keys KeyMaker, deployKeys RepoDeployKeyManager, installer DeployKeyInstaller, refs RefResolver, accounts AccountFetcher, locker *DeployLocker) *DeployService {
+	return &DeployService{servers: servers, vault: vault, tokens: tokens, repo: repo, envs: envs, secrets: secrets, history: history, keys: keys, deployKeys: deployKeys, installer: installer, refs: refs, accounts: accounts, locker: locker}
 }
 
 // Preview generates the deploy artifacts from the config alone, no server, no
@@ -180,6 +187,16 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 	if server.Status != StatusReady {
 		return fmt.Errorf("server must be set up before deploying")
 	}
+
+	// Serialize deploys to the same target so two concurrent runs (a double
+	// click, two tabs, a reconnecting client) never race on the same repo files
+	// and secrets. Held only for this local operation; released on return, so a
+	// client disconnect (ctx cancel) also frees it. A wedged deploy is recovered
+	// via the "clear stuck lock" action.
+	if !s.locker.TryAcquire(in.App) {
+		return ErrDeployInProgress
+	}
+	defer s.locker.Release(in.App)
 
 	token, err := s.tokens.Load()
 	if err != nil {

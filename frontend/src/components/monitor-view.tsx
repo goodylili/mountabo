@@ -41,7 +41,7 @@ import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetc
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
-import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
+import { type AppHealth, clearDeployLock, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
 import { getRepoBranches } from "@/lib/branches";
 import { type UptimeKumaAdmin, fetchUptimeKumaAdmin, resetUptimeKumaAdmin } from "@/lib/uptime-kuma-admin";
 
@@ -97,6 +97,7 @@ export function MonitorView({
   // The delete confirmation gate (the open deployment to forget), and the set of
   // apps already dropped locally so their cards disappear immediately on delete.
   const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
+  const [confirmClearLock, setConfirmClearLock] = useState<Deployment | null>(null);
   const [deletedApps, setDeletedApps] = useState<Set<string>>(new Set());
   const visibleDeployments = deployments.filter((d) => !deletedApps.has(d.app));
 
@@ -117,6 +118,15 @@ export function MonitorView({
     const ok = await deleteDeployment(app);
     if (!ok) return;
     setDeletedApps((prev) => new Set(prev).add(app));
+    startRefresh(() => router.refresh());
+  }
+
+  // confirmLockClear force-releases a stuck deploy lock, then refreshes to
+  // re-pull authoritative lock state. Runs from an event handler.
+  async function confirmLockClear(app: string) {
+    setConfirmClearLock(null);
+    const ok = await clearDeployLock(app);
+    if (!ok) return;
     startRefresh(() => router.refresh());
   }
 
@@ -291,6 +301,7 @@ export function MonitorView({
                     </Badge>
                     <HealthPill health={health[d.app]} />
                     {latest && <LatestRunPill status={latest.status} />}
+                    {d.locked && <LockPill since={d.lockedSince} />}
                   </span>
                   <span className="mt-1.5 block truncate text-[13px] text-muted">
                     {d.repo} · {d.branch} · {server?.name ?? d.serverId}
@@ -316,6 +327,7 @@ export function MonitorView({
                     setConfirmDomain({ server, mode: "remove", host })
                   }
                   onDelete={() => setConfirmDelete(d)}
+                  onClearLock={() => setConfirmClearLock(d)}
                 />
               )}
             </section>
@@ -446,6 +458,29 @@ export function MonitorView({
           onCancel={() => setConfirmDelete(null)}
         />
       )}
+
+      {/* Clear a stuck deploy lock: a recovery escape hatch, not destructive. */}
+      {confirmClearLock && (
+        <ConfirmAction
+          title={`clear lock on ${confirmClearLock.app}`}
+          subtitle="allow a new deploy to start"
+          summary={
+            <>
+              this force-releases the deploy lock on <span className="text-cream">{confirmClearLock.app}</span>{" "}
+              so a new deploy can start. only do this if a previous deploy wedged and left the target
+              locked — clearing it while a deploy is genuinely running could let two deploys race.
+            </>
+          }
+          stepsLabel="what clearing does"
+          steps={[
+            `release mountabo's in-process deploy lock for ${confirmClearLock.app}`,
+            "does not touch the server, the running app, or GitHub — it only frees the local lock",
+          ]}
+          confirmLabel="clear stuck lock"
+          onConfirm={() => void confirmLockClear(confirmClearLock.app)}
+          onCancel={() => setConfirmClearLock(null)}
+        />
+      )}
     </main>
   );
 }
@@ -472,6 +507,16 @@ function HealthPill({ health }: { health: AppHealth | null | undefined }) {
   return (
     <Badge tone="red" dot>
       unhealthy{health.status ? ` · ${health.status}` : ""}
+    </Badge>
+  );
+}
+
+// LockPill shows on a card while a deploy to this target is in flight (the
+// backend's per-target deploy lock is held), with how long it has been held.
+function LockPill({ since }: { since?: string }) {
+  return (
+    <Badge tone="lime" dot>
+      deploying{since ? ` · ${since}` : ""}
     </Badge>
   );
 }
@@ -533,6 +578,7 @@ function ExpandedCard({
   onAddDomain,
   onRemoveDomain,
   onDelete,
+  onClearLock,
 }: {
   deployment: Deployment;
   server?: ServerView;
@@ -541,6 +587,7 @@ function ExpandedCard({
   onAddDomain: (server: ServerView, value: DomainFormValue) => void;
   onRemoveDomain: (server: ServerView, host: string) => void;
   onDelete: () => void;
+  onClearLock: () => void;
 }) {
   const latest = d.runs[0];
   const [owner, repo] = splitRepo(d.repo);
@@ -839,6 +886,28 @@ function ExpandedCard({
               <ReleaseRow key={i} release={rel} />
             ))}
           </ul>
+        )}
+
+        {/* stuck-lock recovery: only shown while the deploy lock is held. Clears
+            the in-process lock so a new deploy can start if a previous one wedged. */}
+        {d.locked && (
+          <div className="mt-2 rounded-xl border border-line bg-surface/40 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[15px] font-medium text-cream">a deploy is in progress</p>
+                <p className="mt-1 max-w-xl text-[13px] leading-6 text-muted">
+                  {d.app} is locked{d.lockedSince ? ` (since ${d.lockedSince})` : ""} while a deploy runs.
+                  if a deploy wedged and left it stuck, clear the lock to allow a new deploy.
+                </p>
+              </div>
+              <button
+                onClick={onClearLock}
+                className="flex shrink-0 items-center gap-2 rounded-md border border-line px-4 py-2 text-[13px] font-medium text-body transition-colors hover:bg-surface"
+              >
+                clear stuck lock
+              </button>
+            </div>
+          </div>
         )}
 
         {/* danger zone: deleting tears the deployment down, so it gets its own

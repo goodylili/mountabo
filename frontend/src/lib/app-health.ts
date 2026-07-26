@@ -46,3 +46,18 @@ export async function deleteDeployment(app: string): Promise<boolean> {
     return false;
   }
 }
+
+// clearDeployLock force-releases a stuck deploy lock for an app (the recovery
+// action when a deploy wedged and left the target locked). Idempotent on the
+// backend, so it returns true on any 2xx. Returns false only on a real failure
+// to reach the backend, so the UI can surface an error.
+export async function clearDeployLock(app: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}/lock`, {
+      method: "DELETE",
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}

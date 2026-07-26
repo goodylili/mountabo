@@ -178,6 +178,11 @@ type DeploymentStatus struct {
 	Runs       []RunView     `json:"runs"`
 	Deploys    int           `json:"deploys"`  // total times deployed (from the tracking log)
 	Timeline   []ReleaseView `json:"timeline"` // recent releases, newest first
+	// Locked is true while a deploy to this target is in flight (the local deploy
+	// lock is held); LockedSince is a relative time like "2m ago". The UI shows a
+	// lock indicator and offers a "clear stuck lock" action.
+	Locked      bool   `json:"locked"`
+	LockedSince string `json:"lockedSince,omitempty"`
 }
 
 // monitorRunLimit caps recent runs; monitorEventLimit caps the deploy timeline.
@@ -211,6 +216,7 @@ type MonitorService struct {
 	repoFiles   RepoFileDeleter
 	repoEnvs    RepoEnvironmentDeleter
 	repoKeys    RepoKeyDeleter
+	locker      *DeployLocker
 	log         *slog.Logger
 }
 
@@ -222,12 +228,19 @@ type MonitorService struct {
 // deploy script; repoEnvs removes the GitHub deployment environment (and its
 // scoped secrets); repoKeys removes the deploy key mountabo added to the repo.
 // Together they undo everything the deploy created on GitHub. The deleter then
-// forgets mountabo's tracking.
-func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, log *slog.Logger) *MonitorService {
+// forgets mountabo's tracking. locker is the shared deploy lock, read to surface
+// lock state and cleared by the recovery action.
+func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, locker *DeployLocker, log *slog.Logger) *MonitorService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, log: log}
+	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, locker: locker, log: log}
+}
+
+// ClearLock force-releases the deploy lock for app (the "clear stuck lock"
+// recovery action) and reports whether a lock was actually held.
+func (s *MonitorService) ClearLock(app string) bool {
+	return s.locker.Clear(app)
 }
 
 // Delete tears a deployment down by its app name: it stops and removes the app's
@@ -411,7 +424,14 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 			// permission, or has no runs yet still appears, just without runs.
 			runs, _ := s.runs.ListWorkflowRuns(gctx, token, d.Owner, d.Repo, d.WorkflowFile, d.Branch, monitorRunLimit)
 			releases, total, _ := s.releases.Releases(d.Owner, d.Repo, d.Branch, monitorEventLimit)
-			out[i] = buildStatus(d, serversByID[d.ServerID], runs, releases, total)
+			status := buildStatus(d, serversByID[d.ServerID], runs, releases, total)
+			// Overlay the live deploy-lock state (keyed by app) so the card can show
+			// a lock indicator while a deploy to this target is in flight.
+			if since, locked := s.locker.Held(d.App); locked {
+				status.Locked = true
+				status.LockedSince = relativeTime(since)
+			}
+			out[i] = status
 			return nil
 		})
 	}

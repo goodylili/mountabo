@@ -36,6 +36,8 @@ type DeploymentResponse = {
   runs: RunResponse[];
   deploys: number;
   timeline: EventResponse[];
+  locked?: boolean;
+  lockedSince?: string;
 };
 
 // getDeployments reads deploy history from the Go backend: the configured
@@ -78,6 +80,8 @@ export async function getDeployments(): Promise<Deployment[]> {
         actor: e.actor ?? "",
         runUrl: e.runUrl ?? "",
       })),
+      locked: d.locked ?? false,
+      lockedSince: d.lockedSince ?? "",
     }));
   } catch {
     return [];
