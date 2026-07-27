@@ -14,6 +14,7 @@ import { fetchListeningPorts } from "@/lib/server-ports";
 import { type DeployPreview, type PreviewPort, type PreviewRequest, fetchPreview } from "@/lib/deploy-preview";
 import { addEnvKeys, type EnvVar, mergeEnv, parseEnvFile } from "@/lib/deploy-template";
 import { fetchEnvExampleKeys } from "@/lib/env-example";
+import { setDeploymentPort } from "@/lib/app-health";
 
 type Tab = "workflow" | "script" | "secrets";
 
@@ -160,6 +161,15 @@ export function ConfigureView({
   // so the operator never picks it twice.
   const [domainHost, setDomainHost] = useState("");
   const [domainWww, setDomainWww] = useState(true);
+  // The port nginx proxies the domain to. It defaults to the app's first
+  // configured port (below) but is an explicit, editable field: a domain needs a
+  // published port to reach, and detection can come up empty (e.g. a compose
+  // stack that publishes no host port), so we never silently drop the domain for
+  // want of a port.
+  const [domainPort, setDomainPort] = useState("");
+  // Set when a deploy fails while a custom domain was entered, so the form can
+  // tell the operator the domain was NOT set up (rather than silently skipping).
+  const [domainSkipped, setDomainSkipped] = useState(false);
   // Chained domain stream: set after a successful deploy when domainHost is
   // non-empty, which triggers a second StreamLog. null otherwise.
   const [domainStream, setDomainStream] = useState<{ host: string; upstream: string; aliases: string[] } | null>(null);
@@ -180,6 +190,14 @@ export function ConfigureView({
     const k = v.key.trim();
     return k !== "" && !envNamePattern.test(k);
   });
+
+  // The domain's upstream port: the operator's explicit value, else the app's
+  // first configured port. A domain with no resolvable port is invalid and
+  // blocks deploy, so the domain is never silently dropped for want of a port.
+  const detectedPort = configuredPorts[0]?.value?.trim() ?? "";
+  const effectiveDomainPort = domainPort.trim() || detectedPort;
+  const validPort = /^\d+$/.test(effectiveDomainPort) && Number(effectiveDomainPort) >= 1 && Number(effectiveDomainPort) <= 65535;
+  const domainInvalid = domainHost.trim() !== "" && !validPort;
 
   const previewReq: PreviewRequest = useMemo(
     () => ({
@@ -526,20 +544,52 @@ export function ConfigureView({
               also serve www.
             </label>
           </div>
+          {domainHost.trim() !== "" && (
+            <div className="mt-3">
+              <label className="mb-1 block text-[12px] text-muted">
+                app port to proxy to{detectedPort ? " (detected from your project)" : ""}
+              </label>
+              <input
+                value={domainPort}
+                onChange={(e) => setDomainPort(e.target.value.replace(/[^0-9]/g, ""))}
+                placeholder={detectedPort || "e.g. 3000"}
+                inputMode="numeric"
+                className={`${inputCls} sm:max-w-[220px]`}
+              />
+              {domainInvalid && (
+                <p className="mt-1.5 text-[12px] text-red-300">
+                  {detectedPort
+                    ? "enter the port your app publishes on the server so nginx can proxy the domain to it."
+                    : "mountabo didn't detect a published port for this app. a domain proxies to a port, so enter the host port your app publishes (and make sure your compose/Dockerfile actually publishes it), otherwise remove the domain."}
+                </p>
+              )}
+            </div>
+          )}
+          {domainSkipped && (
+            <p className="mt-3 rounded-md border border-red-400/30 bg-red-400/[0.04] px-3 py-2 text-[12px] leading-5 text-red-200">
+              the deploy failed, so <span className="text-cream">{domainHost.trim()}</span> was not set up.
+              fix the deploy and run it again — the domain is applied only after a successful deploy.
+            </p>
+          )}
         </Section>
 
         {/* CTA: commit the workflow + deploy.sh and set the secrets, streamed live. */}
         <div className="mt-8">
           <button
-            disabled={!preview || envInvalid}
-            onClick={() => setConfirmDeploy(previewReq)}
+            disabled={!preview || envInvalid || domainInvalid}
+            onClick={() => {
+              setDomainSkipped(false);
+              setConfirmDeploy(previewReq);
+            }}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-6 py-4 font-bold text-lime transition-colors hover:bg-lime/20 disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-2 disabled:text-muted"
             title={
               envInvalid
                 ? "fix the invalid environment variable name first"
-                : preview
-                  ? "commit the workflow + deploy.sh and set the Actions secrets"
-                  : "waiting for a valid configuration"
+                : domainInvalid
+                  ? "the custom domain needs a valid app port to proxy to"
+                  : preview
+                    ? "commit the workflow + deploy.sh and set the Actions secrets"
+                    : "waiting for a valid configuration"
             }
           >
             {deployed ? "re-deploy configuration" : "deploy"}
@@ -593,19 +643,25 @@ export function ConfigureView({
           body={deployBody}
           onClose={() => setDeployBody(null)}
           onDone={(ok) => {
-            if (!ok) return;
-            setDeployed(true);
             const host = domainHost.trim();
+            if (!ok) {
+              // The deploy failed. If a domain was entered, it is NOT applied
+              // (the domain step only runs after a successful deploy) — tell the
+              // operator instead of silently navigating away.
+              if (host !== "") setDomainSkipped(true);
+              return;
+            }
+            setDeployed(true);
             // If the operator filled in a custom domain, chain the add-domain
-            // stream right after deploy succeeds. The upstream port is the
-            // first configured port; aliases include www. only for an apex
-            // domain (one dot). Navigation happens after the domain stream
-            // completes so the operator sees both timelines.
-            const upstream = configuredPorts[0]?.value?.trim() || "";
-            if (host !== "" && upstream !== "") {
+            // stream right after deploy succeeds. The upstream is the explicit
+            // domain port (defaulted to the app's first configured port, and
+            // validated non-empty before deploy, so it is always set here);
+            // aliases include www. only for an apex domain (one dot). Navigation
+            // happens after the domain stream completes so the operator sees both.
+            if (host !== "" && effectiveDomainPort !== "") {
               setDomainStream({
                 host,
-                upstream,
+                upstream: effectiveDomainPort,
                 aliases: domainWww && host.split(".").length === 2 ? [`www.${host}`] : [],
               });
               return;
@@ -627,9 +683,17 @@ export function ConfigureView({
             return `/api/servers/${server.id}/domains/add?${qs.toString()}`;
           })()}
           onClose={() => setDomainStream(null)}
-          onDone={() => {
-            // Always navigate to /deployments after the domain stream resolves,
-            // success or not, so the operator can see the live state of both.
+          onDone={async (ok) => {
+            // On success, record the domain's port as the deployment's port so
+            // the domain associates with it (the card matches domain→deployment
+            // by port). Then navigate regardless, so the operator sees both.
+            if (ok) {
+              await setDeploymentPort(
+                app.trim() || source.name,
+                environment.trim() || branch,
+                Number(domainStream.upstream),
+              );
+            }
             router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
           }}
         />

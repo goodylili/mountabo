@@ -49,6 +49,17 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 	return nil
 }
 
+// SetPort updates the recorded port of the matching deployment, so the store
+// doubles as a DeploymentPortSetter in tests.
+func (f *fakeDeploymentStore) SetPort(owner, repo, environment string, port int) error {
+	for i, d := range f.saved {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
+			f.saved[i].Port = port
+		}
+	}
+	return nil
+}
+
 // Delete removes every saved deployment matching (owner, repo, environment),
 // reporting whether any was removed, so the store doubles as a DeploymentDeleter
 // in tests.

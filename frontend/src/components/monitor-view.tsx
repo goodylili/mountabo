@@ -41,7 +41,7 @@ import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetc
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
-import { type AppHealth, clearDeployLock, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
+import { type AppHealth, clearDeployLock, deleteDeployment, fetchAppHealth, setDeploymentPort } from "@/lib/app-health";
 import { getRepoBranches } from "@/lib/branches";
 import { type UptimeKumaAdmin, fetchUptimeKumaAdmin, resetUptimeKumaAdmin } from "@/lib/uptime-kuma-admin";
 
@@ -371,11 +371,17 @@ export function MonitorView({
               ? addDomainUrl(domainTarget.server.id, domainTarget.value)
               : removeDomainUrl(domainTarget.server.id, domainTarget.host)
           }
-          onDone={(ok) => {
+          onDone={async (ok) => {
             if (!ok) return;
-            if (domainTarget.mode === "add")
+            if (domainTarget.mode === "add") {
               recordDomainAdd(domainTarget.server.id, domainTarget.value);
-            else recordDomainRemove(domainTarget.server.id, domainTarget.host);
+              // Record the domain's port as the open deployment's port so the
+              // domain associates with it (the card matches domain→deployment by
+              // port). Best-effort; the refresh below re-pulls authoritative state.
+              if (openDeployment) {
+                await setDeploymentPort(openDeployment.app, openDeployment.environment, Number(domainTarget.value.upstream));
+              }
+            } else recordDomainRemove(domainTarget.server.id, domainTarget.host);
             startRefresh(() => router.refresh());
           }}
           onClose={() => setDomainTarget(null)}
@@ -635,10 +641,15 @@ function ExpandedCard({
   // at this deployment's port show on the card, and the add form pre-fills
   // that port so adding one is a single field. Pre-computed so the tab bar
   // can show the count and the panel can render without re-deriving it.
+  // Domains are server-level; a deployment claims one only when the domain's
+  // nginx upstream points at the deployment's published port. With no port there
+  // is nothing to match, so this deployment claims no domains — showing every
+  // server domain here would falsely attribute another app's domain to it
+  // (common now that one server hosts several environments).
   const envPort = d.port > 0 ? String(d.port) : undefined;
   const envDomains = envPort
     ? (server?.domains ?? []).filter((dm) => dm.upstream === envPort)
-    : (server?.domains ?? []);
+    : [];
 
   // Tab definitions for the segmented control at the top of the card. Each
   // tab is one panel; only the active one renders below, which keeps the
@@ -792,7 +803,7 @@ function ExpandedCard({
             <div className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-[13.5px]">
               <span className="flex items-center gap-3">
                 <span className="h-1.5 w-1.5 rounded-full bg-lime" />
-                <span className="text-cream">{d.branch}</span>
+                <span className="text-cream">{d.environment || d.branch}</span>
                 <span className="text-muted">on branch {d.branch}</span>
               </span>
               <span className="text-[12px] text-muted">current</span>
@@ -837,7 +848,7 @@ function ExpandedCard({
                     placeholder={
                       branches === null
                         ? "reading branches from github,"
-                        : "branch name, for example production or staging"
+                        : "branch name, for example main or develop"
                     }
                     spellCheck={false}
                     autoCapitalize="off"
@@ -890,10 +901,11 @@ function ExpandedCard({
         {tab === "domains" && server && (
           <div className="overflow-hidden rounded-xl border border-line bg-surface">
             <ServerDomains
-              key={`dom:${envPort ?? "all"}:${envDomains.map((dm) => dm.host).join(",")}`}
+              key={`dom:${envPort ?? "none"}:${envDomains.map((dm) => dm.host).join(",")}`}
               server={server}
               onAdd={(value) => onAddDomain(server, value)}
               onRemove={(host) => onRemoveDomain(server, host)}
+              scoped
               filterUpstream={envPort}
               defaultPort={envPort}
             />

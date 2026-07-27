@@ -24,24 +24,33 @@ const FQDN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 // already fronted by nginx + HTTPS and offers a one-field add: type a domain,
 // pick the app port, done. Adding/removing hands off to the parent, which
 // streams the live log. When the panel is scoped to one environment, the
-// parent can pass filterUpstream (only domains pointing at that port are
-// listed) and defaultPort (the add form pre-fills that port), so each
+// parent passes scoped and filterUpstream (only domains pointing at that port
+// are listed) and defaultPort (the add form pre-fills that port), so each
 // deployment card shows only its own domains and adding one is a single field.
+// A scoped panel with no port lists nothing: a domain proxies to a port, so a
+// portless deployment claims no domains (showing the server's other domains
+// would falsely attribute them to it). Unscoped (the server view) lists all.
 export function ServerDomains({
   server,
   onAdd,
   onRemove,
+  scoped,
   filterUpstream,
   defaultPort,
 }: {
   server: ServerView;
   onAdd: (value: DomainFormValue) => void;
   onRemove: (host: string) => void;
+  scoped?: boolean;
   filterUpstream?: string;
   defaultPort?: string;
 }) {
   const allDomains = server.domains ?? [];
-  const domains = filterUpstream ? allDomains.filter((d) => d.upstream === filterUpstream) : allDomains;
+  const domains = filterUpstream
+    ? allDomains.filter((d) => d.upstream === filterUpstream)
+    : scoped
+      ? []
+      : allDomains;
   const [host, setHost] = useState("");
   const [port, setPort] = useState(defaultPort && defaultPort !== "" ? defaultPort : DEFAULT_PORT);
   const [www, setWww] = useState(true);

@@ -66,3 +66,20 @@ export async function clearDeployLock(app: string, environment: string): Promise
     return false;
   }
 }
+
+// setDeploymentPort records the app's published port on a deployment, so a
+// domain attached to it (which proxies to that port) associates with the
+// deployment. Called after a domain is added from a deployment's card. Returns
+// false on any failure so the caller can still refresh.
+export async function setDeploymentPort(app: string, environment: string, port: number): Promise<boolean> {
+  if (!app || !environment || !Number.isFinite(port) || port < 1) return false;
+  try {
+    const resp = await fetch(
+      `/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}/port`,
+      { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ port }) },
+    );
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}

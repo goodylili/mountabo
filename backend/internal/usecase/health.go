@@ -118,9 +118,11 @@ func (s *AppHealthService) Health(ctx context.Context, app, environment string) 
 // probe runs on the server, so loopback is reachable even when the port is bound
 // to 127.0.0.1 only.
 func probeURL(server Server, dep Deployment) (url, target string) {
-	if len(server.Domains) > 0 {
-		host := server.Domains[0].Host
-		return "https://" + host, host
+	// Prefer THIS deployment's own domain (the one whose nginx upstream is the
+	// deployment's port), so health follows the real visitor path — not just the
+	// server's first domain, which may front a different deployment.
+	if d, ok := domainForPort(server, dep.Port); ok {
+		return "https://" + d.Host, d.Host
 	}
 	if dep.Port > 0 {
 		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(dep.Port))

@@ -196,9 +196,10 @@ type DeploymentSQL struct {
 }
 
 var (
-	_ usecase.DeploymentStore   = (*DeploymentSQL)(nil)
-	_ usecase.ReleaseReader     = (*DeploymentSQL)(nil)
-	_ usecase.DeploymentDeleter = (*DeploymentSQL)(nil)
+	_ usecase.DeploymentStore      = (*DeploymentSQL)(nil)
+	_ usecase.ReleaseReader        = (*DeploymentSQL)(nil)
+	_ usecase.DeploymentDeleter    = (*DeploymentSQL)(nil)
+	_ usecase.DeploymentPortSetter = (*DeploymentSQL)(nil)
 )
 
 // NewDeploymentSQL returns a SQLite-backed deployment store over an open db.
@@ -279,6 +280,18 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 		return fmt.Errorf("record release: %w", err)
 	}
 	return tx.Commit()
+}
+
+// SetPort updates a deployment's recorded published port (owner, repo,
+// environment), without appending a release event — it records the port an
+// operator declared (e.g. when attaching a domain) so the deployment and its
+// domain agree on the port. A missing target is a no-op.
+func (s *DeploymentSQL) SetPort(owner, repo, environment string, port int) error {
+	if _, err := s.db.Exec(`UPDATE deployments SET port = ? WHERE owner = ? AND repo = ? AND environment = ?`,
+		port, owner, repo, environment); err != nil {
+		return fmt.Errorf("set deployment port: %w", err)
+	}
+	return nil
 }
 
 // Delete removes a tracked deployment and its entire append-only event history by

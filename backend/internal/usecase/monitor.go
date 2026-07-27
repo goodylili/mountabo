@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -52,6 +53,13 @@ type DeploymentStore interface {
 // mountabo's tracking; it never touches the running app or the committed workflow.
 type DeploymentDeleter interface {
 	Delete(owner, repo, environment string) (removed bool, err error)
+}
+
+// DeploymentPortSetter updates a deployment's recorded published port, without
+// touching its release history, so a port an operator declares later (e.g. when
+// attaching a domain) is recorded and the deployment and its domain agree.
+type DeploymentPortSetter interface {
+	SetPort(owner, repo, environment string, port int) error
 }
 
 // ContainerTeardown stops and removes an app's running container(s) on a server
@@ -219,6 +227,7 @@ type MonitorService struct {
 	repoFiles   RepoFileDeleter
 	repoEnvs    RepoEnvironmentDeleter
 	repoKeys    RepoKeyDeleter
+	ports       DeploymentPortSetter
 	locker      *DeployLocker
 	log         *slog.Logger
 }
@@ -233,17 +242,33 @@ type MonitorService struct {
 // Together they undo everything the deploy created on GitHub. The deleter then
 // forgets mountabo's tracking. locker is the shared deploy lock, read to surface
 // lock state and cleared by the recovery action.
-func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, locker *DeployLocker, log *slog.Logger) *MonitorService {
+func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, deleter DeploymentDeleter, tokens TokenStore, runs WorkflowRunLister, servers ServerStore, vault SecretVault, teardown ContainerTeardown, repoFiles RepoFileDeleter, repoEnvs RepoEnvironmentDeleter, repoKeys RepoKeyDeleter, ports DeploymentPortSetter, locker *DeployLocker, log *slog.Logger) *MonitorService {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, locker: locker, log: log}
+	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, ports: ports, locker: locker, log: log}
 }
 
 // ClearLock force-releases the deploy lock for an app's environment (the "clear
 // stuck lock" recovery action) and reports whether a lock was actually held.
 func (s *MonitorService) ClearLock(app, environment string) bool {
 	return s.locker.Clear(lockKey(app, environment))
+}
+
+// SetPort records the published port for the deployment identified by app +
+// environment, resolving its owner/repo from the tracked record. It is how a
+// domain attached after deploy tells mountabo which port the app serves on, so
+// the domain associates with the deployment. ErrDeploymentNotFound when no such
+// deployment exists.
+func (s *MonitorService) SetPort(app, environment string, port int) error {
+	dep, found, err := s.lookup(app, environment)
+	if err != nil {
+		return fmt.Errorf("look up deployment: %w", err)
+	}
+	if !found {
+		return ErrDeploymentNotFound
+	}
+	return s.ports.SetPort(dep.Owner, dep.Repo, dep.Environment, port)
 }
 
 // Delete tears a deployment down by its identity (app + environment): it stops
@@ -454,7 +479,7 @@ func buildStatus(d Deployment, server Server, runs []WorkflowRun, releases []Rel
 		Environment: d.Environment,
 		ServerID:    d.ServerID,
 		WorkflowURL: fmt.Sprintf("https://github.com/%s/%s/actions/workflows/%s", d.Owner, d.Repo, d.WorkflowFile),
-		LiveURL:     liveURL(server),
+		LiveURL:     liveURL(server, d.Port),
 		Port:        d.Port,
 		Status:      "idle",
 		LastDeploy:  "n/a",
@@ -526,14 +551,33 @@ func commitURL(owner, repo, sha string) string {
 // app's port. The port is taken from a domain's upstream when one is set;
 // absent that it is unknown, so it is omitted (a plain host URL). It returns ""
 // when the server (and so its address) is unknown.
-func liveURL(server Server) string {
-	if len(server.Domains) > 0 {
-		return "https://" + server.Domains[0].Host
+func liveURL(server Server, port int) string {
+	// Prefer the domain that fronts THIS deployment — the one whose nginx upstream
+	// is the deployment's published port — not just the server's first domain
+	// (a server can host several deployments, each with its own domain).
+	if d, ok := domainForPort(server, port); ok {
+		return "https://" + d.Host
 	}
 	if server.IP == "" {
 		return ""
 	}
 	return "http://" + server.IP
+}
+
+// domainForPort returns the server domain whose nginx upstream is port, so a
+// deployment is matched to its own domain. No match (including port 0, meaning
+// the deployment has no recorded port) returns ok=false.
+func domainForPort(server Server, port int) (Domain, bool) {
+	if port <= 0 {
+		return Domain{}, false
+	}
+	want := strconv.Itoa(port)
+	for _, d := range server.Domains {
+		if d.Upstream == want {
+			return d, true
+		}
+	}
+	return Domain{}, false
 }
 
 // runStatus collapses GitHub's status+conclusion into the UI's three states.

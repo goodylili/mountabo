@@ -48,7 +48,7 @@ func TestAppHealth_ProbesLoopbackPort(t *testing.T) {
 func TestAppHealth_PrefersDomain(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
 	servers := newMemServerStore()
-	_ = servers.Save(readyServer("s1", "203.0.113.7", Domain{Host: "shop.example.com"}))
+	_ = servers.Save(readyServer("s1", "203.0.113.7", Domain{Host: "shop.example.com", Upstream: "8080"}))
 	vault := newFakeVault()
 	_ = vault.SaveSecret(privateKeyKey("s1"), "key")
 	prober := &fakeAppProber{reachable: true, status: 200}
