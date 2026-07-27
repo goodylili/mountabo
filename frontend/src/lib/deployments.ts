@@ -27,6 +27,7 @@ type DeploymentResponse = {
   app: string;
   repo: string;
   branch: string;
+  environment: string;
   serverId: string;
   workflowUrl: string;
   liveUrl: string;
@@ -55,6 +56,7 @@ export async function getDeployments(): Promise<Deployment[]> {
       repo: d.repo,
       serverId: d.serverId,
       branch: d.branch,
+      environment: d.environment ?? "",
       status: (["live", "idle", "failing"].includes(d.status) ? d.status : "idle") as Deployment["status"],
       liveUrl: d.liveUrl ?? "",
       workflowUrl: d.workflowUrl ?? "",

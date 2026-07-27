@@ -142,10 +142,10 @@ func TestMonitorHistory_EnrichesWithRuns(t *testing.T) {
 
 func TestMonitorHistory_SurfacesDeployLockAndClears(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{
-		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", ServerID: "s1", WorkflowFile: "mountabo-deploy-main.yml"},
+		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", Environment: "production", ServerID: "s1", WorkflowFile: "mountabo-deploy-production.yml"},
 	}}
 	locker := NewDeployLocker()
-	locker.TryAcquire("shop") // a deploy to this app is in flight
+	locker.TryAcquire(lockKey("shop", "production")) // a deploy to this environment is in flight
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, locker, nil)
 
 	got, err := svc.History(context.Background())
@@ -160,7 +160,7 @@ func TestMonitorHistory_SurfacesDeployLockAndClears(t *testing.T) {
 	}
 
 	// ClearLock frees it, and a subsequent read shows it unlocked.
-	if !svc.ClearLock("shop") {
+	if !svc.ClearLock("shop", "production") {
 		t.Error("ClearLock should report it cleared a held lock")
 	}
 	got, err = svc.History(context.Background())
@@ -193,7 +193,7 @@ func TestMonitorHistory_NotConnected(t *testing.T) {
 
 func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{
-		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", ServerID: "s1", WorkflowFile: "mountabo-deploy-main.yml"},
+		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", Environment: "production", ServerID: "s1", WorkflowFile: "mountabo-deploy-production.yml"},
 	}}
 	servers := newMemServerStore()
 	_ = servers.Save(Server{ID: "s1", IP: "203.0.113.7", SSHPort: 22, Status: StatusReady})
@@ -203,7 +203,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 	files := &fakeRepoFileDeleter{}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, NewDeployLocker(), nil)
 
-	if err := svc.Delete(context.Background(), "shop"); err != nil {
+	if err := svc.Delete(context.Background(), "shop", "production"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 		t.Errorf("container teardown = %v, want [shop]", teardown.removed)
 	}
 	// Both committed artifacts were deleted from the repo.
-	wantFiles := []string{"acme/shop:deploy.sh", "acme/shop:.github/workflows/mountabo-deploy-main.yml"}
+	wantFiles := []string{"acme/shop:deploy.sh", "acme/shop:.github/workflows/mountabo-deploy-production.yml"}
 	if len(files.deleted) != len(wantFiles) {
 		t.Fatalf("deleted files = %v, want %v", files.deleted, wantFiles)
 	}
@@ -230,14 +230,14 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 func TestMonitorDelete_NotFound(t *testing.T) {
 	deps := &fakeDeploymentStore{}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, NewDeployLocker(), nil)
-	if err := svc.Delete(context.Background(), "missing"); !errors.Is(err, ErrDeploymentNotFound) {
+	if err := svc.Delete(context.Background(), "missing", "production"); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("want ErrDeploymentNotFound, got %v", err)
 	}
 }
 
 func TestMonitorDelete_RemovesRecordEvenWhenTeardownFails(t *testing.T) {
 	deps := &fakeDeploymentStore{saved: []Deployment{
-		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", ServerID: "s1", WorkflowFile: "mountabo-deploy-main.yml"},
+		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", Environment: "production", ServerID: "s1", WorkflowFile: "mountabo-deploy-production.yml"},
 	}}
 	servers := newMemServerStore()
 	_ = servers.Save(Server{ID: "s1", IP: "203.0.113.7", SSHPort: 22, Status: StatusReady})
@@ -249,7 +249,7 @@ func TestMonitorDelete_RemovesRecordEvenWhenTeardownFails(t *testing.T) {
 	files := &fakeRepoFileDeleter{err: errors.New("github down")}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, NewDeployLocker(), nil)
 
-	if err := svc.Delete(context.Background(), "shop"); err != nil {
+	if err := svc.Delete(context.Background(), "shop", "production"); err != nil {
 		t.Fatalf("Delete should succeed despite soft teardown failures, got %v", err)
 	}
 	if got, _ := deps.List(); len(got) != 0 {

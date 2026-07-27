@@ -30,6 +30,9 @@ export function ConfigureView({
 }) {
   const router = useRouter();
   const [app, setApp] = useState(source.name);
+  // The first-class environment this deployment targets. Free-text so agencies
+  // can name it (client-staging, qa, ...); production/staging are the suggestions.
+  const [environment, setEnvironment] = useState("production");
   const [rootDir, setRootDir] = useState("./");
   const [deployDir, setDeployDir] = useState(`/opt/${source.name}`);
   // Ports are detected from the repo's own compose file / Dockerfile, never
@@ -184,6 +187,9 @@ export function ConfigureView({
       owner: source.owner,
       repo: source.name,
       branch,
+      // The first-class environment this deploy targets; defaults to the branch
+      // when left blank (back-compat with pre-environment deploys).
+      environment: environment.trim() || branch,
       strategy: strategy || "compose",
       rootDir,
       deployDir,
@@ -195,7 +201,7 @@ export function ConfigureView({
         return k !== "" && envNamePattern.test(k);
       }),
     }),
-    [app, source.owner, source.name, branch, strategy, rootDir, deployDir, configuredPorts, envVars],
+    [app, source.owner, source.name, branch, environment, strategy, rootDir, deployDir, configuredPorts, envVars],
   );
 
   useEffect(() => {
@@ -250,6 +256,31 @@ export function ConfigureView({
 
         <Section label="project name">
           <input value={app} onChange={(e) => setApp(e.target.value)} className={inputCls} placeholder={source.name} />
+        </Section>
+
+        <Section label="environment" hint="production and staging are the usual ones; any name works">
+          <input
+            value={environment}
+            onChange={(e) => setEnvironment(e.target.value)}
+            className={inputCls}
+            placeholder="production"
+          />
+          <div className="mt-2 flex gap-2">
+            {["production", "staging"].map((name) => (
+              <button
+                key={name}
+                type="button"
+                onClick={() => setEnvironment(name)}
+                className={`rounded-md border px-2.5 py-1 text-[12px] transition-colors ${
+                  environment === name
+                    ? "border-lime/50 bg-lime/10 text-cream"
+                    : "border-line text-muted hover:text-cream"
+                }`}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
         </Section>
 
         <Section label="root directory" hint="where docker-compose.yml lives">
@@ -579,7 +610,7 @@ export function ConfigureView({
               });
               return;
             }
-            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}`);
+            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
           }}
         />
       )}
@@ -599,7 +630,7 @@ export function ConfigureView({
           onDone={() => {
             // Always navigate to /deployments after the domain stream resolves,
             // success or not, so the operator can see the live state of both.
-            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}`);
+            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
           }}
         />
       )}

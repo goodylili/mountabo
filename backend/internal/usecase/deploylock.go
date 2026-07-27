@@ -31,6 +31,13 @@ func NewDeployLocker() *DeployLocker {
 	return &DeployLocker{held: map[string]lockInfo{}}
 }
 
+// lockKey is the deploy-lock key for a deployment target: an app within an
+// environment. Two environments of the same app lock independently. The NUL
+// separator can't appear in either value, so keys never collide by concatenation.
+func lockKey(app, environment string) string {
+	return app + "\x00" + environment
+}
+
 // TryAcquire marks key as held and returns true, or returns false when it is
 // already held (the caller should reject the duplicate operation). Never blocks.
 func (l *DeployLocker) TryAcquire(key string) bool {

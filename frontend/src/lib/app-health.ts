@@ -16,13 +16,17 @@ export type AppHealth = {
 // unreachable) so the card falls back to an "unknown" indicator rather than
 // claiming the app is down. An app that is reachable-but-down comes back as a
 // normal AppHealth with reachable:false.
-export async function fetchAppHealth(app: string, signal?: AbortSignal): Promise<AppHealth | null> {
-  if (!app) return null;
+export async function fetchAppHealth(
+  app: string,
+  environment: string,
+  signal?: AbortSignal,
+): Promise<AppHealth | null> {
+  if (!app || !environment) return null;
   try {
-    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}/health`, {
-      cache: "no-store",
-      signal,
-    });
+    const resp = await fetch(
+      `/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}/health`,
+      { cache: "no-store", signal },
+    );
     if (!resp.ok) return null;
     return (await resp.json()) as AppHealth;
   } catch {
@@ -35,12 +39,12 @@ export async function fetchAppHealth(app: string, signal?: AbortSignal): Promise
 // backend confirms removal (2xx, or 404 meaning it was already gone), false on
 // any other status or failure, so the caller drops the card only on real
 // success. The teardown does SSH and GitHub work, so it is given a long timeout.
-export async function deleteDeployment(app: string): Promise<boolean> {
+export async function deleteDeployment(app: string, environment: string): Promise<boolean> {
   try {
-    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}`, {
-      method: "DELETE",
-      signal: AbortSignal.timeout(90_000),
-    });
+    const resp = await fetch(
+      `/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}`,
+      { method: "DELETE", signal: AbortSignal.timeout(90_000) },
+    );
     return resp.ok || resp.status === 404;
   } catch {
     return false;
@@ -51,11 +55,12 @@ export async function deleteDeployment(app: string): Promise<boolean> {
 // action when a deploy wedged and left the target locked). Idempotent on the
 // backend, so it returns true on any 2xx. Returns false only on a real failure
 // to reach the backend, so the UI can surface an error.
-export async function clearDeployLock(app: string): Promise<boolean> {
+export async function clearDeployLock(app: string, environment: string): Promise<boolean> {
   try {
-    const resp = await fetch(`/api/deployments/${encodeURIComponent(app)}/lock`, {
-      method: "DELETE",
-    });
+    const resp = await fetch(
+      `/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}/lock`,
+      { method: "DELETE" },
+    );
     return resp.ok;
   } catch {
     return false;

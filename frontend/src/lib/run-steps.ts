@@ -39,11 +39,12 @@ export async function fetchRunSteps(
   owner: string,
   repo: string,
   ref: string,
+  environment: string,
   signal?: AbortSignal,
 ): Promise<RunSteps> {
   if (!owner || !repo || !ref) return EMPTY;
   try {
-    const qs = new URLSearchParams({ owner, repo, ref });
+    const qs = new URLSearchParams({ owner, repo, ref, environment });
     const resp = await fetch(`/api/github/run-steps?${qs.toString()}`, { cache: "no-store", signal });
     if (!resp.ok) return EMPTY;
     const data = (await resp.json()) as Partial<RunSteps>;

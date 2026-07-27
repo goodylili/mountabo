@@ -67,6 +67,13 @@ const releaseTone: Record<ReleaseStatus, "blue" | "red" | "lime" | "gray"> = {
 
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 
+// deploymentKey identifies a deployment card by (app, environment) — one app can
+// have several environments, so app alone is not unique. JSON.stringify gives a
+// collision-free, text-safe key used for the open/health/deleted state.
+function deploymentKey(d: Deployment | undefined): string {
+  return d ? JSON.stringify([d.app, d.environment]) : "";
+}
+
 // How often to re-poll the GitHub run walkthrough while a run is in progress.
 const STEP_POLL_MS = 4000;
 
@@ -81,51 +88,64 @@ export function MonitorView({
 }) {
   const router = useRouter();
   // After a successful deploy the configure page sends the operator here with
-  // ?app=<name>, so open that deployment; otherwise open the first one.
-  const appParam = useSearchParams().get("app");
-  const [open, setOpen] = useState<string>(
-    (appParam && deployments.some((d) => d.app === appParam) ? appParam : deployments[0]?.app) ?? "",
-  );
+  // ?app=<name>&environment=<env>, so open that deployment; otherwise open the
+  // first one. Cards are identified by (app, environment) since one app can have
+  // several environments.
+  const params = useSearchParams();
+  const appParam = params.get("app");
+  const envParam = params.get("environment");
+  const [open, setOpen] = useState<string>(() => {
+    const match = deployments.find(
+      (d) => d.app === appParam && (!envParam || d.environment === envParam),
+    );
+    return deploymentKey(match ?? deployments[0]);
+  });
   const [refreshing, startRefresh] = useTransition();
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const serverById = new Map(serverList.map((s) => [s.id, s]));
 
-  // App health per deployment (keyed by app): undefined = not probed yet, null =
-  // could not reach the backend (unknown), otherwise the probe result.
+  // App health per deployment, keyed by (app, environment): undefined = not
+  // probed yet, null = could not reach the backend (unknown), otherwise the
+  // probe result.
   const [health, setHealth] = useState<Record<string, AppHealth | null>>({});
   // The delete confirmation gate (the open deployment to forget), and the set of
-  // apps already dropped locally so their cards disappear immediately on delete.
+  // deployment keys already dropped locally so their cards disappear immediately
+  // on delete.
   const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
   const [confirmClearLock, setConfirmClearLock] = useState<Deployment | null>(null);
-  const [deletedApps, setDeletedApps] = useState<Set<string>>(new Set());
-  const visibleDeployments = deployments.filter((d) => !deletedApps.has(d.app));
+  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(new Set());
+  const visibleDeployments = deployments.filter((d) => !deletedKeys.has(deploymentKey(d)));
 
-  // Probe the open deployment's health on demand (no daemon), keyed by app so it
-  // is fetched once per open until a refresh clears the cache. setState only runs
-  // in the resolved callback, never synchronously in the effect body.
+  // The currently open deployment, resolved from its (app, environment) key.
+  const openDeployment = visibleDeployments.find((d) => deploymentKey(d) === open);
+
+  // Probe the open deployment's health on demand (no daemon), keyed by (app,
+  // environment) so it is fetched once per open until a refresh clears the cache.
+  // setState only runs in the resolved callback, never synchronously in the body.
   useEffect(() => {
-    if (!open || open in health) return;
+    if (!openDeployment || open in health) return;
     const ctrl = new AbortController();
-    fetchAppHealth(open, ctrl.signal).then((h) => setHealth((prev) => ({ ...prev, [open]: h })));
+    const { app, environment } = openDeployment;
+    fetchAppHealth(app, environment, ctrl.signal).then((h) => setHealth((prev) => ({ ...prev, [open]: h })));
     return () => ctrl.abort();
-  }, [open, health]);
+  }, [open, health, openDeployment]);
 
   // confirmDeployDelete forgets a deployment's tracking, drops its card locally,
   // then refreshes to re-pull authoritative state. Runs from an event handler.
-  async function confirmDeployDelete(app: string) {
+  async function confirmDeployDelete(d: Deployment) {
     setConfirmDelete(null);
-    const ok = await deleteDeployment(app);
+    const ok = await deleteDeployment(d.app, d.environment);
     if (!ok) return;
-    setDeletedApps((prev) => new Set(prev).add(app));
+    setDeletedKeys((prev) => new Set(prev).add(deploymentKey(d)));
     startRefresh(() => router.refresh());
   }
 
   // confirmLockClear force-releases a stuck deploy lock, then refreshes to
   // re-pull authoritative lock state. Runs from an event handler.
-  async function confirmLockClear(app: string) {
+  async function confirmLockClear(d: Deployment) {
     setConfirmClearLock(null);
-    const ok = await clearDeployLock(app);
+    const ok = await clearDeployLock(d.app, d.environment);
     if (!ok) return;
     startRefresh(() => router.refresh());
   }
@@ -151,7 +171,6 @@ export function MonitorView({
   const [previewState, setPreviewState] = useState<{ host: string; data: DomainPreview | null } | null>(null);
 
   const liveCount = visibleDeployments.filter((d) => d.status === "live").length;
-  const openDeployment = visibleDeployments.find((d) => d.app === open);
   const openServerId = openDeployment?.serverId ?? "";
 
   // Read the open deployment's server metrics on demand (no daemon), keyed by
@@ -281,13 +300,14 @@ export function MonitorView({
         )}
         {visibleDeployments.map((d) => {
           const server = serverById.get(d.serverId);
-          const isOpen = open === d.app;
+          const key = deploymentKey(d);
+          const isOpen = open === key;
           const m = metrics[d.serverId]; // undefined = still reading, else last good reading
           const latest = d.runs[0];
           return (
-            <section key={d.app} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
+            <section key={key} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
               <button
-                onClick={() => setOpen(isOpen ? "" : d.app)}
+                onClick={() => setOpen(isOpen ? "" : key)}
                 className="flex w-full items-center gap-4 px-6 py-5 pr-16 text-left"
                 aria-expanded={isOpen}
               >
@@ -296,10 +316,11 @@ export function MonitorView({
                 <div className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-3">
                     <span className="text-[18px] font-semibold text-cream">{d.app}</span>
+                    {d.environment && <Badge tone="lime-solid">{d.environment}</Badge>}
                     <Badge tone={statusTone[d.status]} dot>
                       {d.status}
                     </Badge>
-                    <HealthPill health={health[d.app]} />
+                    <HealthPill health={health[key]} />
                     {latest && <LatestRunPill status={latest.status} />}
                     {d.locked && <LockPill since={d.lockedSince} />}
                   </span>
@@ -319,7 +340,7 @@ export function MonitorView({
                   deployment={d}
                   server={server}
                   metrics={m}
-                  health={health[d.app]}
+                  health={health[key]}
                   onAddDomain={(server, value) =>
                     setConfirmDomain({ server, mode: "add", value })
                   }
@@ -454,7 +475,7 @@ export function MonitorView({
             "remove the deployment record and its append-only history from mountabo",
           ]}
           confirmLabel="delete deployment"
-          onConfirm={() => void confirmDeployDelete(confirmDelete.app)}
+          onConfirm={() => void confirmDeployDelete(confirmDelete)}
           onCancel={() => setConfirmDelete(null)}
         />
       )}
@@ -477,7 +498,7 @@ export function MonitorView({
             "does not touch the server, the running app, or GitHub — it only frees the local lock",
           ]}
           confirmLabel="clear stuck lock"
-          onConfirm={() => void confirmLockClear(confirmClearLock.app)}
+          onConfirm={() => void confirmLockClear(confirmClearLock)}
           onCancel={() => setConfirmClearLock(null)}
         />
       )}
@@ -838,7 +859,7 @@ function ExpandedCard({
 
         {/* step-by-step deploy walkthrough from GitHub Actions */}
         {tab === "walkthrough" && (
-          <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
+          <RunWalkthrough owner={owner} repo={repo} branch={d.branch} environment={d.environment} latestStatus={latest?.status} />
         )}
 
         {/* runs list with clickable GitHub links */}
@@ -1144,11 +1165,13 @@ function RunWalkthrough({
   owner,
   repo,
   branch,
+  environment,
   latestStatus,
 }: {
   owner: string;
   repo: string;
   branch: string;
+  environment: string;
   latestStatus?: RunStatus;
 }) {
   const [steps, setSteps] = useState<RunSteps | null>(null);
@@ -1162,7 +1185,7 @@ function RunWalkthrough({
 
     async function tick() {
       const ctrl = new AbortController();
-      const res = await fetchRunSteps(owner, repo, branch, ctrl.signal);
+      const res = await fetchRunSteps(owner, repo, branch, environment, ctrl.signal);
       if (cancelled) return;
       setSteps(res);
       // Keep polling only while the run is still going; stop once it completes.
@@ -1176,7 +1199,7 @@ function RunWalkthrough({
     };
     // latestStatus is included so a refresh that flips the run back to running
     // (a new deploy) restarts polling.
-  }, [enabled, owner, repo, branch, latestStatus]);
+  }, [enabled, owner, repo, branch, environment, latestStatus]);
 
   if (enabled && steps === null) {
     return <p className="mt-4 text-[13px] text-muted">reading the latest workflow run…</p>;

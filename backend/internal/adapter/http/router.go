@@ -25,9 +25,9 @@ import nethttp "net/http"
 //	POST   /api/deploy/preview       generate the workflow + deploy.sh + secrets (no side effects)
 //	POST   /api/servers/{id}/deploy  configure deployment of a repo, streaming (SSE)
 //	GET    /api/deployments          deploy history (configured deployments + their Actions runs)
-//	GET    /api/deployments/{app}/health  probe whether the deployed app is responding (curl over SSH), reporting up/down + HTTP status
-//	DELETE /api/deployments/{app}/lock  force-release a stuck deploy lock for an app (recovery)
-//	DELETE /api/deployments/{app}     forget mountabo's tracking of a deployment (its record + deploy history); does not stop the container or remove the workflow
+//	GET    /api/deployments/{app}/{environment}/health  probe whether the deployed app is responding (curl over SSH), reporting up/down + HTTP status
+//	DELETE /api/deployments/{app}/{environment}/lock  force-release a stuck deploy lock for an app's environment (recovery)
+//	DELETE /api/deployments/{app}/{environment}     forget mountabo's tracking of a deployment (its record + deploy history); does not stop the container or remove the workflow
 //	POST   /api/servers/{id}/exec    run one shell command on the server (over SSH), returns output + exit code
 //	POST   /api/ai/command           suggest a shell command for a plain-English request (Claude), advisory only
 //	DELETE /api/servers/{id}         remove a server and destroy its secrets
@@ -66,9 +66,9 @@ func NewRouter(gh *GitHubHandler, sv *ServersHandler, dep *DeployHandler, mon *M
 	mux.HandleFunc("POST /api/deploy/preview", dep.Preview)
 	mux.HandleFunc("POST /api/servers/{id}/deploy", dep.Deploy)
 	mux.HandleFunc("GET /api/deployments", mon.Deployments)
-	mux.HandleFunc("GET /api/deployments/{app}/health", mon.Health)
-	mux.HandleFunc("DELETE /api/deployments/{app}/lock", mon.ClearLock)
-	mux.HandleFunc("DELETE /api/deployments/{app}", mon.Delete)
+	mux.HandleFunc("GET /api/deployments/{app}/{environment}/health", mon.Health)
+	mux.HandleFunc("DELETE /api/deployments/{app}/{environment}/lock", mon.ClearLock)
+	mux.HandleFunc("DELETE /api/deployments/{app}/{environment}", mon.Delete)
 
 	// Terminal page: run one command on a server, and ask the AI helper for a
 	// command suggestion. The AI endpoint only suggests; the human runs the

@@ -188,15 +188,22 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		return fmt.Errorf("server must be set up before deploying")
 	}
 
-	// Serialize deploys to the same target so two concurrent runs (a double
-	// click, two tabs, a reconnecting client) never race on the same repo files
-	// and secrets. Held only for this local operation; released on return, so a
-	// client disconnect (ctx cancel) also frees it. A wedged deploy is recovered
-	// via the "clear stuck lock" action.
-	if !s.locker.TryAcquire(in.App) {
+	// The environment is the deployment's identity; it defaults to the branch when
+	// the operator leaves it blank (back-compat with pre-environment deploys).
+	env := strings.TrimSpace(in.Environment)
+	if env == "" {
+		env = strings.TrimSpace(in.Branch)
+	}
+
+	// Serialize deploys to the same target (app within an environment) so two
+	// concurrent runs (a double click, two tabs, a reconnecting client) never race
+	// on the same repo files and secrets. Held only for this local operation;
+	// released on return, so a client disconnect (ctx cancel) also frees it. A
+	// wedged deploy is recovered via the "clear stuck lock" action.
+	if !s.locker.TryAcquire(lockKey(in.App, env)) {
 		return ErrDeployInProgress
 	}
-	defer s.locker.Release(in.App)
+	defer s.locker.Release(lockKey(in.App, env))
 
 	token, err := s.tokens.Load()
 	if err != nil {
@@ -213,10 +220,6 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 
 	cfg := buildConfig(in)
 	cfg.DeployKeyFile = deployKeyFileName(in.Owner, in.Repo)
-	env := cfg.Environment
-	if env == "" {
-		env = cfg.Branch
-	}
 
 	progress(out, "writing %s", workflow.DeployScriptPath)
 	if err := s.repo.PutFile(ctx, token, in.Owner, in.Repo, in.Branch, workflow.DeployScriptPath, workflow.DeployScript(cfg), "mountabo: add deploy script"); err != nil {
@@ -289,7 +292,7 @@ func (s *DeployService) Deploy(ctx context.Context, in DeployInput, out io.Write
 		Branch:       in.Branch,
 		Environment:  env,
 		ServerID:     in.ServerID,
-		WorkflowFile: fmt.Sprintf("mountabo-deploy-%s.yml", in.Branch),
+		WorkflowFile: workflow.FileName(env),
 		Port:         primaryPort(in.Ports),
 		CreatedAt:    time.Now().UTC(),
 		CommitSHA:    commitSHA,

@@ -52,14 +52,14 @@ func NewAppHealthService(deployments DeploymentLookup, servers ServerStore, vaul
 	return &AppHealthService{deployments: deployments, servers: servers, vault: vault, prober: prober}
 }
 
-// Health probes the deployment named by app and reports whether it is up. It
-// resolves the deployment's server and the address to probe (its domain, or its
-// loopback published port), connects to the server as the mountabo user, and
-// curls the app from the box. ErrDeploymentNotFound is returned when no
-// deployment has that app; ErrServerNotFound propagates from the store. A probe
-// that connects but gets no answer (app down) is NOT an error: it returns an
-// AppHealth with Reachable false so the card can show "unhealthy".
-func (s *AppHealthService) Health(ctx context.Context, app string) (AppHealth, error) {
+// Health probes the deployment identified by app + environment and reports
+// whether it is up. It resolves the deployment's server and the address to probe
+// (its domain, or its loopback published port), connects to the server as the
+// mountabo user, and curls the app from the box. ErrDeploymentNotFound is
+// returned when no deployment matches; ErrServerNotFound propagates from the
+// store. A probe that connects but gets no answer (app down) is NOT an error: it
+// returns an AppHealth with Reachable false so the card can show "unhealthy".
+func (s *AppHealthService) Health(ctx context.Context, app, environment string) (AppHealth, error) {
 	deployments, err := s.deployments.List()
 	if err != nil {
 		return AppHealth{}, fmt.Errorf("list deployments: %w", err)
@@ -67,7 +67,7 @@ func (s *AppHealthService) Health(ctx context.Context, app string) (AppHealth, e
 	var dep Deployment
 	found := false
 	for _, d := range deployments {
-		if d.App == app {
+		if d.App == app && d.Environment == environment {
 			dep, found = d, true
 			break
 		}

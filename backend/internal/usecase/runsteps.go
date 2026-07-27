@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"fmt"
+
+	"github.com/goodylili/mountabo/internal/workflow"
 )
 
 // RunStep is one step of a GitHub Actions job in the latest deploy run.
@@ -59,13 +61,13 @@ func NewRunStepsService(tokens TokenStore, jobs WorkflowJobLister) *RunStepsServ
 	return &RunStepsService{tokens: tokens, jobs: jobs}
 }
 
-// Steps returns the latest run of the deploy workflow for owner/repo on branch,
-// with its jobs and steps. ref is the branch (defaulting to the repo's deploy
-// branch convention is the caller's job; an empty ref reads the default
-// branch's runs). It derives the workflow file from the branch, matching the
-// name the deploy generator commits. It returns ErrNotConnected when no token is
-// stored, and an empty RunSteps (no error) when there is no run yet.
-func (s *RunStepsService) Steps(ctx context.Context, owner, repo, ref string) (RunSteps, error) {
+// Steps returns the latest run of an environment's deploy workflow for
+// owner/repo, with its jobs and steps. ref is the branch used to filter runs;
+// environment names which per-environment workflow file to read (falling back to
+// ref when empty, for pre-environment deploys where the file was branch-named).
+// It returns ErrNotConnected when no token is stored, and an empty RunSteps (no
+// error) when there is no run yet.
+func (s *RunStepsService) Steps(ctx context.Context, owner, repo, ref, environment string) (RunSteps, error) {
 	if owner == "" || repo == "" {
 		return RunSteps{}, fmt.Errorf("owner and repo are required")
 	}
@@ -73,7 +75,11 @@ func (s *RunStepsService) Steps(ctx context.Context, owner, repo, ref string) (R
 	if err != nil {
 		return RunSteps{}, fmt.Errorf("load token: %w", err)
 	}
-	workflowFile := fmt.Sprintf("mountabo-deploy-%s.yml", ref)
+	env := environment
+	if env == "" {
+		env = ref
+	}
+	workflowFile := workflow.FileName(env)
 	steps, err := s.jobs.LatestRun(ctx, token, owner, repo, workflowFile, ref)
 	if err != nil {
 		return RunSteps{}, fmt.Errorf("read run steps: %w", err)

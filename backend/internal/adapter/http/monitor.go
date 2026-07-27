@@ -51,8 +51,8 @@ func (h *MonitorHandler) Deployments(w nethttp.ResponseWriter, r *nethttp.Reques
 // app that is simply down is a 200 with reachable:false, so the card can show an
 // honest unhealthy indicator.
 func (h *MonitorHandler) Health(w nethttp.ResponseWriter, r *nethttp.Request) {
-	app := r.PathValue("app")
-	health, err := h.health.Health(r.Context(), app)
+	app, environment := r.PathValue("app"), r.PathValue("environment")
+	health, err := h.health.Health(r.Context(), app, environment)
 	switch {
 	case errors.Is(err, usecase.ErrDeploymentNotFound):
 		h.writeError(w, nethttp.StatusNotFound, "deployment not found")
@@ -61,7 +61,7 @@ func (h *MonitorHandler) Health(w nethttp.ResponseWriter, r *nethttp.Request) {
 		h.writeError(w, nethttp.StatusNotFound, "server not found")
 		return
 	case err != nil:
-		h.log.Error("probe app health failed", "app", app, "err", err)
+		h.log.Error("probe app health failed", "app", app, "environment", environment, "err", err)
 		h.writeError(w, nethttp.StatusBadGateway, "could not probe the app over ssh")
 		return
 	}
@@ -79,26 +79,27 @@ func (h *MonitorHandler) Health(w nethttp.ResponseWriter, r *nethttp.Request) {
 // unreachable, file already gone) are logged but still return 204, so the user
 // is never stuck. Not-found is 404.
 func (h *MonitorHandler) Delete(w nethttp.ResponseWriter, r *nethttp.Request) {
-	app := r.PathValue("app")
-	if err := h.svc.Delete(r.Context(), app); err != nil {
+	app, environment := r.PathValue("app"), r.PathValue("environment")
+	if err := h.svc.Delete(r.Context(), app, environment); err != nil {
 		if errors.Is(err, usecase.ErrDeploymentNotFound) {
 			h.writeError(w, nethttp.StatusNotFound, "deployment not found")
 			return
 		}
-		h.log.Error("delete deployment failed", "app", app, "err", err)
+		h.log.Error("delete deployment failed", "app", app, "environment", environment, "err", err)
 		h.writeError(w, nethttp.StatusInternalServerError, "could not delete the deployment")
 		return
 	}
 	w.WriteHeader(nethttp.StatusNoContent)
 }
 
-// ClearLock force-releases the deploy lock for the app named in the path (the
-// "clear stuck lock" recovery action). It is idempotent: clearing an app that is
-// not locked still returns 204, so the UI never has to special-case it.
+// ClearLock force-releases the deploy lock for the app + environment named in the
+// path (the "clear stuck lock" recovery action). It is idempotent: clearing a
+// target that is not locked still returns 204, so the UI never has to
+// special-case it.
 func (h *MonitorHandler) ClearLock(w nethttp.ResponseWriter, r *nethttp.Request) {
-	app := r.PathValue("app")
-	if cleared := h.svc.ClearLock(app); cleared {
-		h.log.Info("cleared stuck deploy lock", "app", app)
+	app, environment := r.PathValue("app"), r.PathValue("environment")
+	if cleared := h.svc.ClearLock(app, environment); cleared {
+		h.log.Info("cleared stuck deploy lock", "app", app, "environment", environment)
 	}
 	w.WriteHeader(nethttp.StatusNoContent)
 }

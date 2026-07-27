@@ -49,13 +49,14 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 	return nil
 }
 
-// DeleteByApp removes every saved deployment with the given app, reporting
-// whether any was removed, so the store doubles as a DeploymentDeleter in tests.
-func (f *fakeDeploymentStore) DeleteByApp(app string) (bool, error) {
+// Delete removes every saved deployment matching (owner, repo, environment),
+// reporting whether any was removed, so the store doubles as a DeploymentDeleter
+// in tests.
+func (f *fakeDeploymentStore) Delete(owner, repo, environment string) (bool, error) {
 	kept := make([]Deployment, 0, len(f.saved))
 	removed := false
 	for _, d := range f.saved {
-		if d.App == app {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
 			removed = true
 			continue
 		}
@@ -257,19 +258,19 @@ func TestDeploy_LockRejectsConcurrentAndReleasesAfter(t *testing.T) {
 	in := deployInput()
 
 	// A deploy to the same app is in flight (lock held): the second is rejected.
-	if !locker.TryAcquire(in.App) {
+	if !locker.TryAcquire(lockKey(in.App, in.Branch)) {
 		t.Fatal("precondition: could not acquire the lock")
 	}
 	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); !errors.Is(err, ErrDeployInProgress) {
 		t.Fatalf("concurrent deploy: want ErrDeployInProgress, got %v", err)
 	}
-	locker.Release(in.App)
+	locker.Release(lockKey(in.App, in.Branch))
 
 	// With the lock free, the deploy succeeds and releases the lock on return.
 	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); err != nil {
 		t.Fatalf("Deploy after release: %v", err)
 	}
-	if _, held := locker.Held(in.App); held {
+	if _, held := locker.Held(lockKey(in.App, in.Branch)); held {
 		t.Error("lock should be released after Deploy returns")
 	}
 }

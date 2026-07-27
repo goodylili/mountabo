@@ -20,6 +20,12 @@ import (
 // record that rollback and release history build on. Fields known only after a
 // deploy runs (image_ref, health, and the terminal status/run_url) are provisioned
 // here and populated by later phases; status defaults to 'pending'.
+// The deployment identity is (owner, repo, environment): a repo can have several
+// first-class environments (production, staging, ...), each with its own branch,
+// server, domain and release history. branch is an attribute of the environment,
+// not part of the key. Older databases keyed by (owner, repo, branch) are
+// rebuilt in place on open (see migrateDeploymentsKey); since environment
+// defaulted to the branch, that rebuild is a no-op for existing data.
 const schema = `
 CREATE TABLE IF NOT EXISTS deployments (
 	owner TEXT NOT NULL,
@@ -32,7 +38,7 @@ CREATE TABLE IF NOT EXISTS deployments (
 	workflow_file TEXT NOT NULL,
 	port INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL,
-	PRIMARY KEY (owner, repo, branch)
+	PRIMARY KEY (owner, repo, environment)
 );
 CREATE TABLE IF NOT EXISTS deploy_events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +57,7 @@ CREATE TABLE IF NOT EXISTS deploy_events (
 	run_url TEXT NOT NULL DEFAULT '',
 	prev_event_id INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_deploy_events_target ON deploy_events(owner, repo, branch, at);
+CREATE INDEX IF NOT EXISTS idx_deploy_events_target ON deploy_events(owner, repo, environment, at);
 `
 
 // releaseColumns are the deploy_events columns added after the table first
@@ -100,7 +106,86 @@ func OpenSQLite(path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("add release column: %w", err)
 		}
 	}
+	// Migrate databases whose deployments table still keys by (owner, repo,
+	// branch) to the environment key. Runs after the port migration so the rebuild
+	// can carry the port column across.
+	if err := migrateDeploymentsKey(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("re-key deployments: %w", err)
+	}
 	return db, nil
+}
+
+// migrateDeploymentsKey rebuilds an old deployments table (PRIMARY KEY on
+// branch) under the environment key. SQLite cannot alter a primary key in place,
+// so it copies into a new table and swaps. It is a no-op when the table is
+// already environment-keyed (fresh DBs, or an already-migrated one). Rows are
+// deduped to the latest created_at per (owner, repo, environment) — a collision
+// only arises if an operator explicitly reused one environment name across
+// branches, which never happened while environment defaulted to the branch.
+func migrateDeploymentsKey(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(deployments)`)
+	if err != nil {
+		return fmt.Errorf("inspect deployments: %w", err)
+	}
+	branchIsKey := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan column info: %w", err)
+		}
+		if name == "branch" && pk > 0 {
+			branchIsKey = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	if !branchIsKey {
+		return nil // already environment-keyed
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`CREATE TABLE deployments_new (
+		owner TEXT NOT NULL,
+		repo TEXT NOT NULL,
+		branch TEXT NOT NULL,
+		id TEXT NOT NULL,
+		app TEXT NOT NULL,
+		environment TEXT NOT NULL,
+		server_id TEXT NOT NULL,
+		workflow_file TEXT NOT NULL,
+		port INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL,
+		PRIMARY KEY (owner, repo, environment)
+	)`); err != nil {
+		return fmt.Errorf("create rebuilt table: %w", err)
+	}
+	// OR REPLACE + ORDER BY created_at ASC: rows are inserted oldest-first, so on
+	// an (owner, repo, environment) conflict the latest deploy wins.
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO deployments_new
+		(owner, repo, branch, id, app, environment, server_id, workflow_file, port, created_at)
+		SELECT owner, repo, branch, id, app, environment, server_id, workflow_file, port, created_at
+		FROM deployments ORDER BY created_at ASC`); err != nil {
+		return fmt.Errorf("copy rows: %w", err)
+	}
+	if _, err := tx.Exec(`DROP TABLE deployments`); err != nil {
+		return fmt.Errorf("drop old table: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE deployments_new RENAME TO deployments`); err != nil {
+		return fmt.Errorf("rename rebuilt table: %w", err)
+	}
+	return tx.Commit()
 }
 
 // DeploymentSQL persists configured deployments in SQLite and records an
@@ -143,9 +228,9 @@ func (s *DeploymentSQL) List() ([]usecase.Deployment, error) {
 	return out, rows.Err()
 }
 
-// Save upserts the deployment by owner+repo+branch, keeping the original id and
-// first-seen created_at on re-deploy, and appends a deploy event for tracking.
-// Both writes share one transaction so history never drifts from state.
+// Save upserts the deployment by owner+repo+environment, keeping the original id
+// and first-seen created_at on re-deploy, and appends a deploy event for
+// tracking. Both writes share one transaction so history never drifts from state.
 func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 	createdAt := d.CreatedAt
 	if createdAt.IsZero() {
@@ -164,9 +249,9 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 	if _, err := tx.Exec(`INSERT INTO deployments
 		(owner, repo, branch, id, app, environment, server_id, workflow_file, port, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(owner, repo, branch) DO UPDATE SET
+		ON CONFLICT(owner, repo, environment) DO UPDATE SET
+			branch = excluded.branch,
 			app = excluded.app,
-			environment = excluded.environment,
 			server_id = excluded.server_id,
 			workflow_file = excluded.workflow_file,
 			port = excluded.port`,
@@ -175,12 +260,12 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 		return fmt.Errorf("upsert deployment: %w", err)
 	}
 
-	// Link this release to the target's previous one (NULL for the first), so
+	// Link this release to the environment's previous one (NULL for the first), so
 	// release history is a chain rollback can walk. Computed inside the same
 	// transaction so a concurrent deploy cannot slot a release in between.
 	var prevID sql.NullInt64
-	if err := tx.QueryRow(`SELECT MAX(id) FROM deploy_events WHERE owner = ? AND repo = ? AND branch = ?`,
-		d.Owner, d.Repo, d.Branch).Scan(&prevID); err != nil {
+	if err := tx.QueryRow(`SELECT MAX(id) FROM deploy_events WHERE owner = ? AND repo = ? AND environment = ?`,
+		d.Owner, d.Repo, d.Environment).Scan(&prevID); err != nil {
 		return fmt.Errorf("find previous release: %w", err)
 	}
 
@@ -196,14 +281,11 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 	return tx.Commit()
 }
 
-// DeleteByApp removes a tracked deployment and its entire append-only event
-// history by its app name, in one transaction so state and history never drift.
-// It reports whether a deployment row was actually removed (false means no
-// deployment had that app, so the caller can answer 404). The app column is not
-// unique in the schema, but the deploy flow names one deployment per app, so in
-// practice this targets a single record; should duplicates ever exist, all of
-// them (and their events) are removed together.
-func (s *DeploymentSQL) DeleteByApp(app string) (bool, error) {
+// Delete removes a tracked deployment and its entire append-only event history by
+// its identity (owner, repo, environment), in one transaction so state and
+// history never drift. It reports whether a deployment row was actually removed
+// (false means no such deployment, so the caller can answer 404).
+func (s *DeploymentSQL) Delete(owner, repo, environment string) (bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, fmt.Errorf("begin transaction: %w", err)
@@ -213,10 +295,12 @@ func (s *DeploymentSQL) DeleteByApp(app string) (bool, error) {
 	// Drop the history first, then the state, so a row never loses its state while
 	// its events linger (the reverse would briefly orphan events on partial fail,
 	// though the transaction makes both atomic regardless).
-	if _, err := tx.Exec(`DELETE FROM deploy_events WHERE app = ?`, app); err != nil {
+	if _, err := tx.Exec(`DELETE FROM deploy_events WHERE owner = ? AND repo = ? AND environment = ?`,
+		owner, repo, environment); err != nil {
 		return false, fmt.Errorf("delete deploy events: %w", err)
 	}
-	res, err := tx.Exec(`DELETE FROM deployments WHERE app = ?`, app)
+	res, err := tx.Exec(`DELETE FROM deployments WHERE owner = ? AND repo = ? AND environment = ?`,
+		owner, repo, environment)
 	if err != nil {
 		return false, fmt.Errorf("delete deployment: %w", err)
 	}
@@ -235,17 +319,17 @@ func (s *DeploymentSQL) DeleteByApp(app string) (bool, error) {
 // release carries the durable fields captured at deploy time (commit sha, actor,
 // environment, status, previous-release link); image_ref/health/run_url are
 // provisioned but populated by later phases.
-func (s *DeploymentSQL) Releases(owner, repo, branch string, limit int) ([]usecase.Release, int, error) {
+func (s *DeploymentSQL) Releases(owner, repo, environment string, limit int) ([]usecase.Release, int, error) {
 	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM deploy_events WHERE owner = ? AND repo = ? AND branch = ?`,
-		owner, repo, branch).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM deploy_events WHERE owner = ? AND repo = ? AND environment = ?`,
+		owner, repo, environment).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count releases: %w", err)
 	}
 
 	rows, err := s.db.Query(`SELECT id, at, environment, commit_sha, image_ref, status, health, actor, run_url, prev_event_id
 		FROM deploy_events
-		WHERE owner = ? AND repo = ? AND branch = ?
-		ORDER BY at DESC, id DESC LIMIT ?`, owner, repo, branch, limit)
+		WHERE owner = ? AND repo = ? AND environment = ?
+		ORDER BY at DESC, id DESC LIMIT ?`, owner, repo, environment, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("query releases: %w", err)
 	}

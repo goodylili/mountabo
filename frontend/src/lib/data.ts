@@ -82,6 +82,9 @@ export type Deployment = {
   repo: string;
   serverId: string;
   branch: string;
+  // The first-class environment this deployment targets (production, staging,
+  // ...); together with app it identifies the deployment.
+  environment: string;
   status: "live" | "idle" | "failing";
   // The running app's public address (what the operator actually visits).
   liveUrl: string;
