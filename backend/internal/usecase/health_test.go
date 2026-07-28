@@ -25,7 +25,7 @@ func readyServer(id, ip string, domains ...Domain) Server {
 }
 
 func TestAppHealth_ProbesLoopbackPort(t *testing.T) {
-	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
+	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Owner: "acme", Repo: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
 	servers := newMemServerStore()
 	_ = servers.Save(readyServer("s1", "203.0.113.7"))
 	vault := newFakeVault()
@@ -33,7 +33,7 @@ func TestAppHealth_ProbesLoopbackPort(t *testing.T) {
 	prober := &fakeAppProber{reachable: true, status: 200}
 
 	svc := NewAppHealthService(deps, servers, vault, prober)
-	got, err := svc.Health(context.Background(), "shop", "production")
+	got, err := svc.Health(context.Background(), "acme", "shop", "production")
 	if err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestAppHealth_ProbesLoopbackPort(t *testing.T) {
 }
 
 func TestAppHealth_PrefersDomain(t *testing.T) {
-	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
+	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Owner: "acme", Repo: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
 	servers := newMemServerStore()
 	_ = servers.Save(readyServer("s1", "203.0.113.7", Domain{Host: "shop.example.com", Upstream: "8080"}))
 	vault := newFakeVault()
@@ -54,7 +54,7 @@ func TestAppHealth_PrefersDomain(t *testing.T) {
 	prober := &fakeAppProber{reachable: true, status: 200}
 
 	svc := NewAppHealthService(deps, servers, vault, prober)
-	got, err := svc.Health(context.Background(), "shop", "production")
+	got, err := svc.Health(context.Background(), "acme", "shop", "production")
 	if err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAppHealth_PrefersDomain(t *testing.T) {
 }
 
 func TestAppHealth_DownIsNotAnError(t *testing.T) {
-	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
+	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Owner: "acme", Repo: "shop", Environment: "production", ServerID: "s1", Port: 8080}}}
 	servers := newMemServerStore()
 	_ = servers.Save(readyServer("s1", "203.0.113.7"))
 	vault := newFakeVault()
@@ -75,7 +75,7 @@ func TestAppHealth_DownIsNotAnError(t *testing.T) {
 	prober := &fakeAppProber{reachable: false, status: 0}
 
 	svc := NewAppHealthService(deps, servers, vault, prober)
-	got, err := svc.Health(context.Background(), "shop", "production")
+	got, err := svc.Health(context.Background(), "acme", "shop", "production")
 	if err != nil {
 		t.Fatalf("Health (down app): %v", err)
 	}
@@ -85,7 +85,7 @@ func TestAppHealth_DownIsNotAnError(t *testing.T) {
 }
 
 func TestAppHealth_NoPortNoDomain(t *testing.T) {
-	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Environment: "production", ServerID: "s1"}}}
+	deps := &fakeDeploymentStore{saved: []Deployment{{App: "shop", Owner: "acme", Repo: "shop", Environment: "production", ServerID: "s1"}}}
 	servers := newMemServerStore()
 	_ = servers.Save(readyServer("s1", "203.0.113.7"))
 	vault := newFakeVault()
@@ -93,7 +93,7 @@ func TestAppHealth_NoPortNoDomain(t *testing.T) {
 	prober := &fakeAppProber{}
 
 	svc := NewAppHealthService(deps, servers, vault, prober)
-	got, err := svc.Health(context.Background(), "shop", "production")
+	got, err := svc.Health(context.Background(), "acme", "shop", "production")
 	if err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestAppHealth_NoPortNoDomain(t *testing.T) {
 
 func TestAppHealth_UnknownApp(t *testing.T) {
 	svc := NewAppHealthService(&fakeDeploymentStore{}, newMemServerStore(), newFakeVault(), &fakeAppProber{})
-	if _, err := svc.Health(context.Background(), "nope", "production"); !errors.Is(err, ErrDeploymentNotFound) {
+	if _, err := svc.Health(context.Background(), "acme", "shop", "production"); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("want ErrDeploymentNotFound, got %v", err)
 	}
 }

@@ -71,7 +71,9 @@ const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
 // have several environments, so app alone is not unique. JSON.stringify gives a
 // collision-free, text-safe key used for the open/health/deleted state.
 function deploymentKey(d: Deployment | undefined): string {
-  return d ? JSON.stringify([d.app, d.environment]) : "";
+  // repo is "owner/repo" — with environment it is the deployment's unique
+  // identity (app names can collide across repos, so don't key on app).
+  return d ? JSON.stringify([d.repo, d.environment]) : "";
 }
 
 // How often to re-poll the GitHub run walkthrough while a run is in progress.
@@ -88,15 +90,17 @@ export function MonitorView({
 }) {
   const router = useRouter();
   // After a successful deploy the configure page sends the operator here with
-  // ?app=<name>&environment=<env>, so open that deployment; otherwise open the
-  // first one. Cards are identified by (app, environment) since one app can have
-  // several environments.
+  // ?owner=<o>&repo=<r>&environment=<env>, so open that deployment; otherwise
+  // open the first one. Deployments are identified by (owner/repo, environment) —
+  // an app name can collide across repos, so match on the repo, not the app.
   const params = useSearchParams();
-  const appParam = params.get("app");
+  const ownerParam = params.get("owner");
+  const repoParam = params.get("repo");
   const envParam = params.get("environment");
   const [open, setOpen] = useState<string>(() => {
+    const fullRepo = ownerParam && repoParam ? `${ownerParam}/${repoParam}` : "";
     const match = deployments.find(
-      (d) => d.app === appParam && (!envParam || d.environment === envParam),
+      (d) => d.repo === fullRepo && (!envParam || d.environment === envParam),
     );
     return deploymentKey(match ?? deployments[0]);
   });
@@ -114,6 +118,9 @@ export function MonitorView({
   // on delete.
   const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
   const [confirmClearLock, setConfirmClearLock] = useState<Deployment | null>(null);
+  // Set when a domain was configured but recording its port on the deployment
+  // failed, so the domain won't associate — surfaced instead of silently lost.
+  const [portAssocError, setPortAssocError] = useState<string | null>(null);
   const [deletedKeys, setDeletedKeys] = useState<Set<string>>(new Set());
   const visibleDeployments = deployments.filter((d) => !deletedKeys.has(deploymentKey(d)));
 
@@ -126,8 +133,10 @@ export function MonitorView({
   useEffect(() => {
     if (!openDeployment || open in health) return;
     const ctrl = new AbortController();
-    const { app, environment } = openDeployment;
-    fetchAppHealth(app, environment, ctrl.signal).then((h) => setHealth((prev) => ({ ...prev, [open]: h })));
+    const [owner, repo] = splitRepo(openDeployment.repo);
+    fetchAppHealth(owner, repo, openDeployment.environment, ctrl.signal).then((h) =>
+      setHealth((prev) => ({ ...prev, [open]: h })),
+    );
     return () => ctrl.abort();
   }, [open, health, openDeployment]);
 
@@ -135,7 +144,8 @@ export function MonitorView({
   // then refreshes to re-pull authoritative state. Runs from an event handler.
   async function confirmDeployDelete(d: Deployment) {
     setConfirmDelete(null);
-    const ok = await deleteDeployment(d.app, d.environment);
+    const [owner, repo] = splitRepo(d.repo);
+    const ok = await deleteDeployment(owner, repo, d.environment);
     if (!ok) return;
     setDeletedKeys((prev) => new Set(prev).add(deploymentKey(d)));
     startRefresh(() => router.refresh());
@@ -145,7 +155,8 @@ export function MonitorView({
   // re-pull authoritative lock state. Runs from an event handler.
   async function confirmLockClear(d: Deployment) {
     setConfirmClearLock(null);
-    const ok = await clearDeployLock(d.app, d.environment);
+    const [owner, repo] = splitRepo(d.repo);
+    const ok = await clearDeployLock(owner, repo, d.environment);
     if (!ok) return;
     startRefresh(() => router.refresh());
   }
@@ -292,6 +303,19 @@ export function MonitorView({
         />
       </div>
 
+      {portAssocError && (
+        <div className="mt-6 flex items-start justify-between gap-4 rounded-xl border border-red-400/30 bg-red-400/[0.05] px-4 py-3 text-[13px] leading-6 text-red-200">
+          <span>{portAssocError}</span>
+          <button
+            onClick={() => setPortAssocError(null)}
+            className="shrink-0 text-red-300 transition-colors hover:text-cream"
+            aria-label="dismiss"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       <div className="rise mt-8 flex flex-col gap-5" style={{ animationDelay: "120ms" }}>
         {visibleDeployments.length === 0 && (
           <p className="rounded-2xl border border-dashed border-line px-6 py-16 text-center text-[14px] text-muted">
@@ -377,9 +401,16 @@ export function MonitorView({
               recordDomainAdd(domainTarget.server.id, domainTarget.value);
               // Record the domain's port as the open deployment's port so the
               // domain associates with it (the card matches domain→deployment by
-              // port). Best-effort; the refresh below re-pulls authoritative state.
+              // port). The domain is already live on the server; if this link
+              // fails, surface it — otherwise the domain silently won't show here.
               if (openDeployment) {
-                await setDeploymentPort(openDeployment.app, openDeployment.environment, Number(domainTarget.value.upstream));
+                const [owner, repo] = splitRepo(openDeployment.repo);
+                const linked = await setDeploymentPort(owner, repo, openDeployment.environment, Number(domainTarget.value.upstream));
+                if (!linked) {
+                  setPortAssocError(
+                    `${domainTarget.value.host} is live on the server, but linking it to ${openDeployment.app} (${openDeployment.environment}) failed. re-add the domain, or set the app port, or it won't show on this card.`,
+                  );
+                }
               }
             } else recordDomainRemove(domainTarget.server.id, domainTarget.host);
             startRefresh(() => router.refresh());

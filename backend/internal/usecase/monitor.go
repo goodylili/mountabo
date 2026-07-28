@@ -57,9 +57,11 @@ type DeploymentDeleter interface {
 
 // DeploymentPortSetter updates a deployment's recorded published port, without
 // touching its release history, so a port an operator declares later (e.g. when
-// attaching a domain) is recorded and the deployment and its domain agree.
+// attaching a domain) is recorded and the deployment and its domain agree. It
+// reports whether a row was actually updated (false = no such deployment), so a
+// row that vanished between lookup and update is not mistaken for success.
 type DeploymentPortSetter interface {
-	SetPort(owner, repo, environment string, port int) error
+	SetPort(owner, repo, environment string, port int) (updated bool, err error)
 }
 
 // ContainerTeardown stops and removes an app's running container(s) on a server
@@ -249,39 +251,40 @@ func NewMonitorService(deployments DeploymentStore, releases ReleaseReader, dele
 	return &MonitorService{deployments: deployments, releases: releases, deleter: deleter, tokens: tokens, runs: runs, servers: servers, vault: vault, teardown: teardown, repoFiles: repoFiles, repoEnvs: repoEnvs, repoKeys: repoKeys, ports: ports, locker: locker, log: log}
 }
 
-// ClearLock force-releases the deploy lock for an app's environment (the "clear
-// stuck lock" recovery action) and reports whether a lock was actually held.
-func (s *MonitorService) ClearLock(app, environment string) bool {
-	return s.locker.Clear(lockKey(app, environment))
+// ClearLock force-releases the deploy lock for a deployment (owner, repo,
+// environment) — the "clear stuck lock" recovery action — and reports whether a
+// lock was actually held.
+func (s *MonitorService) ClearLock(owner, repo, environment string) bool {
+	return s.locker.Clear(lockKey(owner, repo, environment))
 }
 
-// SetPort records the published port for the deployment identified by app +
-// environment, resolving its owner/repo from the tracked record. It is how a
-// domain attached after deploy tells mountabo which port the app serves on, so
-// the domain associates with the deployment. ErrDeploymentNotFound when no such
-// deployment exists.
-func (s *MonitorService) SetPort(app, environment string, port int) error {
-	dep, found, err := s.lookup(app, environment)
+// SetPort records the published port for the deployment identified by its full
+// identity (owner, repo, environment). It is how a domain attached after deploy
+// tells mountabo which port the app serves on, so the domain associates with the
+// deployment. ErrDeploymentNotFound when no such deployment exists (including if
+// it vanished between the store write and now).
+func (s *MonitorService) SetPort(owner, repo, environment string, port int) error {
+	updated, err := s.ports.SetPort(owner, repo, environment, port)
 	if err != nil {
-		return fmt.Errorf("look up deployment: %w", err)
+		return fmt.Errorf("set deployment port: %w", err)
 	}
-	if !found {
+	if !updated {
 		return ErrDeploymentNotFound
 	}
-	return s.ports.SetPort(dep.Owner, dep.Repo, dep.Environment, port)
+	return nil
 }
 
-// Delete tears a deployment down by its identity (app + environment): it stops
-// and removes the app's container(s) on its server over SSH and deletes the
+// Delete tears a deployment down by its identity (owner, repo, environment): it
+// stops and removes the app's container(s) on its server over SSH and deletes the
 // committed deploy workflow and deploy.sh from the repo, then forgets mountabo's
 // tracking (the deployment record and its append-only deploy history). The
 // teardown is best-effort: its failures are logged but never block removing the
 // record, so a user is never stuck with an undeletable deployment.
 // ErrDeploymentNotFound is returned when no such deployment exists.
-func (s *MonitorService) Delete(ctx context.Context, app, environment string) error {
+func (s *MonitorService) Delete(ctx context.Context, owner, repo, environment string) error {
 	// Load the record first so the teardown knows which server and repo files to
 	// reach. A missing record is the not-found case; a store read failure is real.
-	dep, found, err := s.lookup(app, environment)
+	dep, found, err := s.lookup(owner, repo, environment)
 	if err != nil {
 		return fmt.Errorf("look up deployment: %w", err)
 	}
@@ -303,15 +306,16 @@ func (s *MonitorService) Delete(ctx context.Context, app, environment string) er
 	return nil
 }
 
-// lookup finds the tracked deployment for an app + environment. found is false
-// when no deployment matches.
-func (s *MonitorService) lookup(app, environment string) (Deployment, bool, error) {
+// lookup finds the tracked deployment by its identity (owner, repo,
+// environment) — unique, unlike an app name, which two repos can share. found is
+// false when no deployment matches.
+func (s *MonitorService) lookup(owner, repo, environment string) (Deployment, bool, error) {
 	deployments, err := s.deployments.List()
 	if err != nil {
 		return Deployment{}, false, fmt.Errorf("list deployments: %w", err)
 	}
 	for _, d := range deployments {
-		if d.App == app && d.Environment == environment {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
 			return d, true, nil
 		}
 	}
@@ -455,7 +459,7 @@ func (s *MonitorService) History(ctx context.Context) ([]DeploymentStatus, error
 			status := buildStatus(d, serversByID[d.ServerID], runs, releases, total)
 			// Overlay the live deploy-lock state (keyed by app + environment) so the
 			// card can show a lock indicator while a deploy to this target is in flight.
-			if since, locked := s.locker.Held(lockKey(d.App, d.Environment)); locked {
+			if since, locked := s.locker.Held(lockKey(d.Owner, d.Repo, d.Environment)); locked {
 				status.Locked = true
 				status.LockedSince = relativeTime(since)
 			}

@@ -173,6 +173,9 @@ export function ConfigureView({
   // Chained domain stream: set after a successful deploy when domainHost is
   // non-empty, which triggers a second StreamLog. null otherwise.
   const [domainStream, setDomainStream] = useState<{ host: string; upstream: string; aliases: string[] } | null>(null);
+  // Set when a domain went live but recording its port on the deployment failed,
+  // so the domain won't associate — surfaced instead of navigating as if fine.
+  const [domainLinkError, setDomainLinkError] = useState<string | null>(null);
   // Set when the operator clicks deploy: opens the confirmation gate first. The
   // deploy only runs (deployBody is set) once they confirm, so nothing reaches
   // the repository or server unseen.
@@ -190,6 +193,13 @@ export function ConfigureView({
     const k = v.key.trim();
     return k !== "" && !envNamePattern.test(k);
   });
+
+  // The environment names the deployment and becomes a URL path segment in the
+  // deployment API, so it must be path-safe (letters, numbers, dot, dash,
+  // underscore — no slashes/spaces). It defaults to the branch, which can contain
+  // a slash; that must be caught here too.
+  const effectiveEnvironment = environment.trim() || branch;
+  const environmentInvalid = !/^[A-Za-z0-9._-]+$/.test(effectiveEnvironment);
 
   // The domain's upstream port: the operator's explicit value, else the app's
   // first configured port. A domain with no resolvable port is invalid and
@@ -276,7 +286,7 @@ export function ConfigureView({
           <input value={app} onChange={(e) => setApp(e.target.value)} className={inputCls} placeholder={source.name} />
         </Section>
 
-        <Section label="environment" hint="production and staging are the usual ones; any name works">
+        <Section label="environment" hint="production and staging are the usual ones — letters, numbers, dots, dashes and underscores">
           <input
             value={environment}
             onChange={(e) => setEnvironment(e.target.value)}
@@ -299,6 +309,12 @@ export function ConfigureView({
               </button>
             ))}
           </div>
+          {environmentInvalid && (
+            <p className="mt-2 text-[12px] text-red-300">
+              use only letters, numbers, dots, dashes or underscores (no slashes or spaces)
+              {environment.trim() === "" ? ` — the branch "${branch}" isn't a valid environment name, so type one` : ""}.
+            </p>
+          )}
         </Section>
 
         <Section label="root directory" hint="where docker-compose.yml lives">
@@ -571,25 +587,32 @@ export function ConfigureView({
               fix the deploy and run it again — the domain is applied only after a successful deploy.
             </p>
           )}
+          {domainLinkError && (
+            <p className="mt-3 rounded-md border border-red-400/30 bg-red-400/[0.04] px-3 py-2 text-[12px] leading-5 text-red-200">
+              {domainLinkError}
+            </p>
+          )}
         </Section>
 
         {/* CTA: commit the workflow + deploy.sh and set the secrets, streamed live. */}
         <div className="mt-8">
           <button
-            disabled={!preview || envInvalid || domainInvalid}
+            disabled={!preview || envInvalid || domainInvalid || environmentInvalid}
             onClick={() => {
               setDomainSkipped(false);
               setConfirmDeploy(previewReq);
             }}
             className="flex w-full items-center justify-center gap-2 rounded-xl border border-lime/40 bg-lime/10 px-6 py-4 font-bold text-lime transition-colors hover:bg-lime/20 disabled:cursor-not-allowed disabled:border-line disabled:bg-surface-2 disabled:text-muted"
             title={
-              envInvalid
-                ? "fix the invalid environment variable name first"
-                : domainInvalid
-                  ? "the custom domain needs a valid app port to proxy to"
-                  : preview
-                    ? "commit the workflow + deploy.sh and set the Actions secrets"
-                    : "waiting for a valid configuration"
+              environmentInvalid
+                ? "the environment name must be letters, numbers, dots, dashes or underscores (no slashes)"
+                : envInvalid
+                  ? "fix the invalid environment variable name first"
+                  : domainInvalid
+                    ? "the custom domain needs a valid app port to proxy to"
+                    : preview
+                      ? "commit the workflow + deploy.sh and set the Actions secrets"
+                      : "waiting for a valid configuration"
             }
           >
             {deployed ? "re-deploy configuration" : "deploy"}
@@ -666,7 +689,7 @@ export function ConfigureView({
               });
               return;
             }
-            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
+            router.push(`/deployments?owner=${encodeURIComponent(source.owner)}&repo=${encodeURIComponent(source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
           }}
         />
       )}
@@ -684,17 +707,31 @@ export function ConfigureView({
           })()}
           onClose={() => setDomainStream(null)}
           onDone={async (ok) => {
-            // On success, record the domain's port as the deployment's port so
-            // the domain associates with it (the card matches domain→deployment
-            // by port). Then navigate regardless, so the operator sees both.
-            if (ok) {
-              await setDeploymentPort(
-                app.trim() || source.name,
-                environment.trim() || branch,
-                Number(domainStream.upstream),
-              );
+            const dest = `/deployments?owner=${encodeURIComponent(source.owner)}&repo=${encodeURIComponent(source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`;
+            if (!ok) {
+              // The domain stream failed; the deploy already succeeded. Go to the
+              // deployments page so the operator sees the live state and can retry
+              // the domain from the card.
+              router.push(dest);
+              return;
             }
-            router.push(`/deployments?app=${encodeURIComponent(app.trim() || source.name)}&environment=${encodeURIComponent(environment.trim() || branch)}`);
+            // Record the domain's port as the deployment's port (owner/repo/env is
+            // the identity) so the domain associates with it. If that link fails,
+            // surface it and stay — otherwise the domain silently won't show.
+            const linked = await setDeploymentPort(
+              source.owner,
+              source.name,
+              environment.trim() || branch,
+              Number(domainStream.upstream),
+            );
+            if (!linked) {
+              setDomainStream(null);
+              setDomainLinkError(
+                `${domainStream.host} is live, but linking it to this deployment failed. open the deployment and re-add the domain (or set its app port) so it shows and is reachable.`,
+              );
+              return;
+            }
+            router.push(dest);
           }}
         />
       )}

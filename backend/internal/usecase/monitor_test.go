@@ -145,7 +145,7 @@ func TestMonitorHistory_SurfacesDeployLockAndClears(t *testing.T) {
 		{App: "shop", Owner: "acme", Repo: "shop", Branch: "main", Environment: "production", ServerID: "s1", WorkflowFile: "mountabo-deploy-production.yml"},
 	}}
 	locker := NewDeployLocker()
-	locker.TryAcquire(lockKey("shop", "production")) // a deploy to this environment is in flight
+	locker.TryAcquire(lockKey("acme", "shop", "production")) // a deploy to this environment is in flight
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, deps, locker, nil)
 
 	got, err := svc.History(context.Background())
@@ -160,7 +160,7 @@ func TestMonitorHistory_SurfacesDeployLockAndClears(t *testing.T) {
 	}
 
 	// ClearLock frees it, and a subsequent read shows it unlocked.
-	if !svc.ClearLock("shop", "production") {
+	if !svc.ClearLock("acme", "shop", "production") {
 		t.Error("ClearLock should report it cleared a held lock")
 	}
 	got, err = svc.History(context.Background())
@@ -196,13 +196,13 @@ func TestMonitorSetPort_RecordsPortForAppEnvironment(t *testing.T) {
 	}}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, deps, NewDeployLocker(), nil)
 
-	if err := svc.SetPort("shop", "production", 8010); err != nil {
+	if err := svc.SetPort("acme", "shop", "production", 8010); err != nil {
 		t.Fatalf("SetPort: %v", err)
 	}
 	if deps.saved[0].Port != 8010 {
 		t.Errorf("recorded port = %d, want 8010", deps.saved[0].Port)
 	}
-	if err := svc.SetPort("shop", "staging", 8010); !errors.Is(err, ErrDeploymentNotFound) {
+	if err := svc.SetPort("acme", "shop", "staging", 8010); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Errorf("SetPort for a missing environment = %v, want ErrDeploymentNotFound", err)
 	}
 }
@@ -238,7 +238,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 	files := &fakeRepoFileDeleter{}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, deps, NewDeployLocker(), nil)
 
-	if err := svc.Delete(context.Background(), "shop", "production"); err != nil {
+	if err := svc.Delete(context.Background(), "acme", "shop", "production"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -265,7 +265,7 @@ func TestMonitorDelete_TearsDownContainerWorkflowAndRecord(t *testing.T) {
 func TestMonitorDelete_NotFound(t *testing.T) {
 	deps := &fakeDeploymentStore{}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, newMemServerStore(), newFakeVault(), &fakeContainerTeardown{}, &fakeRepoFileDeleter{}, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, deps, NewDeployLocker(), nil)
-	if err := svc.Delete(context.Background(), "missing", "production"); !errors.Is(err, ErrDeploymentNotFound) {
+	if err := svc.Delete(context.Background(), "acme", "shop", "missing"); !errors.Is(err, ErrDeploymentNotFound) {
 		t.Fatalf("want ErrDeploymentNotFound, got %v", err)
 	}
 }
@@ -284,7 +284,7 @@ func TestMonitorDelete_RemovesRecordEvenWhenTeardownFails(t *testing.T) {
 	files := &fakeRepoFileDeleter{err: errors.New("github down")}
 	svc := NewMonitorService(deps, fakeReleaseReader{}, deps, &fakeStore{loadTok: Token{AccessToken: "tok"}}, fakeRunLister{}, servers, vault, teardown, files, &fakeRepoEnvDeleter{}, &fakeRepoKeyDeleter{}, deps, NewDeployLocker(), nil)
 
-	if err := svc.Delete(context.Background(), "shop", "production"); err != nil {
+	if err := svc.Delete(context.Background(), "acme", "shop", "production"); err != nil {
 		t.Fatalf("Delete should succeed despite soft teardown failures, got %v", err)
 	}
 	if got, _ := deps.List(); len(got) != 0 {

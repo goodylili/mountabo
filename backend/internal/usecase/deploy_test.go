@@ -51,13 +51,15 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 
 // SetPort updates the recorded port of the matching deployment, so the store
 // doubles as a DeploymentPortSetter in tests.
-func (f *fakeDeploymentStore) SetPort(owner, repo, environment string, port int) error {
+func (f *fakeDeploymentStore) SetPort(owner, repo, environment string, port int) (bool, error) {
+	updated := false
 	for i, d := range f.saved {
 		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
 			f.saved[i].Port = port
+			updated = true
 		}
 	}
-	return nil
+	return updated, nil
 }
 
 // Delete removes every saved deployment matching (owner, repo, environment),
@@ -208,6 +210,23 @@ func TestDeploy_WritesArtifactsProvisionsEnvAndSecrets(t *testing.T) {
 	}
 }
 
+func TestDeploy_RejectsUnsafeEnvironmentName(t *testing.T) {
+	_, _, _, _, _, svc := readyDeployFixture(t)
+	in := deployInput()
+	in.Environment = "feature/foo" // a slash would break the /{environment} route
+	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); err == nil {
+		t.Fatal("Deploy should reject an environment name with a slash")
+	}
+
+	// A blank environment that would default to a slashed branch is also rejected.
+	in2 := deployInput()
+	in2.Environment = ""
+	in2.Branch = "feature/foo"
+	if err := svc.Deploy(context.Background(), in2, new(strings.Builder)); err == nil {
+		t.Fatal("Deploy should reject a blank environment that defaults to a slashed branch")
+	}
+}
+
 func TestDeploy_EnvironmentOverridesBranch(t *testing.T) {
 	_, _, _, envs, secrets, svc := readyDeployFixture(t)
 	in := deployInput()
@@ -269,19 +288,19 @@ func TestDeploy_LockRejectsConcurrentAndReleasesAfter(t *testing.T) {
 	in := deployInput()
 
 	// A deploy to the same app is in flight (lock held): the second is rejected.
-	if !locker.TryAcquire(lockKey(in.App, in.Branch)) {
+	if !locker.TryAcquire(lockKey(in.Owner, in.Repo, in.Branch)) {
 		t.Fatal("precondition: could not acquire the lock")
 	}
 	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); !errors.Is(err, ErrDeployInProgress) {
 		t.Fatalf("concurrent deploy: want ErrDeployInProgress, got %v", err)
 	}
-	locker.Release(lockKey(in.App, in.Branch))
+	locker.Release(lockKey(in.Owner, in.Repo, in.Branch))
 
 	// With the lock free, the deploy succeeds and releases the lock on return.
 	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); err != nil {
 		t.Fatalf("Deploy after release: %v", err)
 	}
-	if _, held := locker.Held(lockKey(in.App, in.Branch)); held {
+	if _, held := locker.Held(lockKey(in.Owner, in.Repo, in.Branch)); held {
 		t.Error("lock should be released after Deploy returns")
 	}
 }

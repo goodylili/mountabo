@@ -285,13 +285,19 @@ func (s *DeploymentSQL) Save(d usecase.Deployment) error {
 // SetPort updates a deployment's recorded published port (owner, repo,
 // environment), without appending a release event — it records the port an
 // operator declared (e.g. when attaching a domain) so the deployment and its
-// domain agree on the port. A missing target is a no-op.
-func (s *DeploymentSQL) SetPort(owner, repo, environment string, port int) error {
-	if _, err := s.db.Exec(`UPDATE deployments SET port = ? WHERE owner = ? AND repo = ? AND environment = ?`,
-		port, owner, repo, environment); err != nil {
-		return fmt.Errorf("set deployment port: %w", err)
+// domain agree on the port. It reports whether a row was updated; false means no
+// such deployment (so the caller can 404 rather than report a phantom success).
+func (s *DeploymentSQL) SetPort(owner, repo, environment string, port int) (bool, error) {
+	res, err := s.db.Exec(`UPDATE deployments SET port = ? WHERE owner = ? AND repo = ? AND environment = ?`,
+		port, owner, repo, environment)
+	if err != nil {
+		return false, fmt.Errorf("set deployment port: %w", err)
 	}
-	return nil
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	return affected > 0, nil
 }
 
 // Delete removes a tracked deployment and its entire append-only event history by

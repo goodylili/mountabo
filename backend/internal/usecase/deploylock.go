@@ -31,11 +31,12 @@ func NewDeployLocker() *DeployLocker {
 	return &DeployLocker{held: map[string]lockInfo{}}
 }
 
-// lockKey is the deploy-lock key for a deployment target: an app within an
-// environment. Two environments of the same app lock independently. The NUL
-// separator can't appear in either value, so keys never collide by concatenation.
-func lockKey(app, environment string) string {
-	return app + "\x00" + environment
+// lockKey is the deploy-lock key for a deployment target, its full identity
+// (owner, repo, environment) — the same key the storage layer uses, so two
+// deployments never share a lock just because they share an app name. The NUL
+// separators can't appear in the values, so keys never collide by concatenation.
+func lockKey(owner, repo, environment string) string {
+	return owner + "\x00" + repo + "\x00" + environment
 }
 
 // TryAcquire marks key as held and returns true, or returns false when it is

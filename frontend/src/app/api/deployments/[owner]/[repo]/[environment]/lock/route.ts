@@ -4,16 +4,16 @@ import { backendURL } from "@/lib/servers";
 export const dynamic = "force-dynamic";
 
 // Proxies "clear stuck deploy lock" to the Go backend, which force-releases the
-// in-process deploy lock for the app's environment so a new deploy can start.
-// Idempotent: clearing a target that is not locked still succeeds.
+// in-process deploy lock for the deployment (owner/repo/environment) so a new
+// deploy can start. Idempotent: clearing a target that is not locked still succeeds.
 export async function DELETE(
   _request: Request,
-  { params }: { params: Promise<{ app: string; environment: string }> },
+  { params }: { params: Promise<{ owner: string; repo: string; environment: string }> },
 ) {
-  const { app, environment } = await params;
+  const { owner, repo, environment } = await params;
   try {
     const resp = await fetch(
-      `${backendURL()}/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}/lock`,
+      `${backendURL()}/api/deployments/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(environment)}/lock`,
       { method: "DELETE" },
     );
     return new NextResponse(null, { status: resp.status });

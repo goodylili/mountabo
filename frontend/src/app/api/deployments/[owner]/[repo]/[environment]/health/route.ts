@@ -4,18 +4,17 @@ import { backendURL } from "@/lib/servers";
 export const dynamic = "force-dynamic";
 
 // Proxies the app health probe to the Go backend, which curls the deployed app
-// (an app's environment) from its own server over SSH (its loopback published
-// port, or its domain) and reports up/down plus the HTTP status. The monitor
-// calls this on demand.
+// (owner/repo/environment) from its own server over SSH (its loopback published
+// port, or its domain) and reports up/down plus the HTTP status.
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ app: string; environment: string }> },
+  { params }: { params: Promise<{ owner: string; repo: string; environment: string }> },
 ) {
-  const { app, environment } = await params;
+  const { owner, repo, environment } = await params;
   let resp: Response;
   try {
     resp = await fetch(
-      `${backendURL()}/api/deployments/${encodeURIComponent(app)}/${encodeURIComponent(environment)}/health`,
+      `${backendURL()}/api/deployments/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(environment)}/health`,
       { cache: "no-store", signal: AbortSignal.timeout(25_000) },
     );
   } catch {
