@@ -91,9 +91,17 @@ func (c Config) envNames() []string {
 	return out
 }
 
-// Path is the in-repo path of the generated workflow, one per branch.
+// FileName is the generated workflow's file name, one per environment. This is
+// the single source of the naming convention; callers that need the bare name
+// (the deploy record, the monitor, the run walkthrough) use it instead of
+// re-deriving the string.
+func FileName(environment string) string {
+	return fmt.Sprintf("mountabo-deploy-%s.yml", environment)
+}
+
+// Path is the in-repo path of the generated workflow, one per environment.
 func Path(c Config) string {
-	return fmt.Sprintf(".github/workflows/mountabo-deploy-%s.yml", c.Branch)
+	return ".github/workflows/" + FileName(c.environment())
 }
 
 // Workflow renders the GitHub Actions workflow YAML. It is the same for both
@@ -119,6 +127,13 @@ on:
     branches:
       - %[2]s
   workflow_dispatch:
+
+# Serialize deploys to this target: while a run is in progress, a newer run
+# queues behind it rather than cancelling it, so a half-applied deploy is never
+# interrupted. Group is per app+environment to match mountabo's local deploy lock.
+concurrency:
+  group: mountabo-deploy-%[1]s-%[3]s
+  cancel-in-progress: false
 
 jobs:
   deploy:

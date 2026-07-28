@@ -47,9 +47,29 @@ log "setting timezone to {{.Timezone}}"
 timedatectl set-timezone '{{.Timezone}}'
 
 log "installing docker"
-curl -fsSL https://get.docker.com | sh
+# get.docker.com re-runs its whole install (and can rewrite the apt repo config)
+# even when docker already exists, printing a warning and pausing. On a server
+# that already has docker that is wasted work and a source of repo churn, so only
+# run the installer when docker is actually missing.
+if command -v docker >/dev/null 2>&1; then
+  log "docker already installed ($(docker --version 2>/dev/null || echo 'version unknown')); skipping install"
+else
+  curl -fsSL https://get.docker.com | sh
+fi
+
+# Let {{.User}} reach the docker daemon without sudo. Ensure the group exists
+# first, since a pre-existing docker install might not have created it.
+getent group docker >/dev/null 2>&1 || groupadd docker
 usermod -aG docker {{.User}}
-apt-get install -y docker-compose-plugin
+
+# Ensure the compose v2 plugin ("docker compose") is available; skip when it
+# already works, e.g. a server already moved off the legacy docker-compose v1.
+if docker compose version >/dev/null 2>&1; then
+  log "docker compose plugin already present; skipping"
+else
+  log "installing docker compose plugin"
+  apt-get install -y docker-compose-plugin
+fi
 
 log "verifying docker"
 docker --version

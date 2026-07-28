@@ -66,7 +66,7 @@ func (f *DeploymentFile) List() ([]usecase.Deployment, error) {
 	return f.load()
 }
 
-// Save upserts a deployment by owner+repo+branch (one record per deploy
+// Save upserts a deployment by owner+repo+environment (one record per deploy
 // target), so re-deploying updates it rather than appending a duplicate.
 func (f *DeploymentFile) Save(d usecase.Deployment) error {
 	f.mu.Lock()
@@ -77,7 +77,7 @@ func (f *DeploymentFile) Save(d usecase.Deployment) error {
 	}
 	replaced := false
 	for i, existing := range deployments {
-		if existing.Owner == d.Owner && existing.Repo == d.Repo && existing.Branch == d.Branch {
+		if existing.Owner == d.Owner && existing.Repo == d.Repo && existing.Environment == d.Environment {
 			d.ID = existing.ID // keep the original id on update
 			deployments[i] = d
 			replaced = true

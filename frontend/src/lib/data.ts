@@ -49,6 +49,23 @@ export const servers: Server[] = [];
 
 export type RunStatus = "success" | "failed" | "running";
 
+// ReleaseStatus is a release's state in the deploy log. "pending" is a release
+// recorded at deploy time whose Actions run has not completed (or aged out), so
+// no live run status has been overlaid yet.
+export type ReleaseStatus = RunStatus | "pending";
+
+// Release is one entry in a deployment's release history. sha/actor are captured
+// durably at deploy time; status/runUrl are overlaid live from the matching
+// Actions run when available.
+export type Release = {
+  when: string;
+  environment: string;
+  sha: string;
+  status: ReleaseStatus;
+  actor: string;
+  runUrl: string;
+};
+
 export type DeployRun = {
   sha: string;
   message: string;
@@ -65,6 +82,9 @@ export type Deployment = {
   repo: string;
   serverId: string;
   branch: string;
+  // The first-class environment this deployment targets (production, staging,
+  // ...); together with app it identifies the deployment.
+  environment: string;
   status: "live" | "idle" | "failing";
   // The running app's public address (what the operator actually visits).
   liveUrl: string;
@@ -80,9 +100,15 @@ export type Deployment = {
   metrics: { cpu: string; mem: string; ping: string };
   runs: DeployRun[];
   // Tracking (from the SQLite deploy-event log): total times deployed + a recent
-  // timeline (newest first).
+  // release history (newest first). The field keeps the name "timeline" to match
+  // the backend payload key.
   deploys?: number;
-  timeline?: { when: string; environment: string }[];
+  timeline?: Release[];
+  // locked is true while a deploy to this target is in flight (the backend's
+  // in-process deploy lock is held); lockedSince is a relative time like "2m ago".
+  // The card shows a lock indicator and offers a "clear stuck lock" action.
+  locked?: boolean;
+  lockedSince?: string;
 };
 
 // What's currently running where, assembled from GitHub Actions run history +

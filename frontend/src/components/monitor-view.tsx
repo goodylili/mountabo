@@ -19,7 +19,7 @@ import {
   Terminal,
   Trash,
 } from "@/components/icons";
-import type { Deployment, DeployRun, RunStatus } from "@/lib/data";
+import type { Deployment, DeployRun, Release, ReleaseStatus, RunStatus } from "@/lib/data";
 import type { Domain, ServerView } from "@/lib/servers";
 import {
   type ServerMetrics,
@@ -41,7 +41,7 @@ import { isLogHeader, logHeaderName, splitLogTimestamp, formatLogTimestamp, fetc
 import { classifyJobLogLine, fetchJobLogs } from "@/lib/job-logs";
 import { type DomainPreview, fetchDomainPreview } from "@/lib/domain-preview";
 import { type DashboardTool, installedDashboards, openDashboard } from "@/lib/dashboards";
-import { type AppHealth, deleteDeployment, fetchAppHealth } from "@/lib/app-health";
+import { type AppHealth, clearDeployLock, deleteDeployment, fetchAppHealth, setDeploymentPort } from "@/lib/app-health";
 import { getRepoBranches } from "@/lib/branches";
 import { type UptimeKumaAdmin, fetchUptimeKumaAdmin, resetUptimeKumaAdmin } from "@/lib/uptime-kuma-admin";
 
@@ -51,7 +51,30 @@ const runColor: Record<RunStatus, string> = {
   running: "bg-lime",
 };
 
+// Release status extends run status with "pending" (recorded at deploy time, no
+// completed run yet). Dot colours and Badge tones reuse the run palette.
+const releaseColor: Record<ReleaseStatus, string> = {
+  ...runColor,
+  pending: "bg-muted",
+};
+
+const releaseTone: Record<ReleaseStatus, "blue" | "red" | "lime" | "gray"> = {
+  success: "blue",
+  failed: "red",
+  running: "lime",
+  pending: "gray",
+};
+
 const statusTone = { live: "blue", idle: "gray", failing: "red" } as const;
+
+// deploymentKey identifies a deployment card by (app, environment) — one app can
+// have several environments, so app alone is not unique. JSON.stringify gives a
+// collision-free, text-safe key used for the open/health/deleted state.
+function deploymentKey(d: Deployment | undefined): string {
+  // repo is "owner/repo" — with environment it is the deployment's unique
+  // identity (app names can collide across repos, so don't key on app).
+  return d ? JSON.stringify([d.repo, d.environment]) : "";
+}
 
 // How often to re-poll the GitHub run walkthrough while a run is in progress.
 const STEP_POLL_MS = 4000;
@@ -67,42 +90,74 @@ export function MonitorView({
 }) {
   const router = useRouter();
   // After a successful deploy the configure page sends the operator here with
-  // ?app=<name>, so open that deployment; otherwise open the first one.
-  const appParam = useSearchParams().get("app");
-  const [open, setOpen] = useState<string>(
-    (appParam && deployments.some((d) => d.app === appParam) ? appParam : deployments[0]?.app) ?? "",
-  );
+  // ?owner=<o>&repo=<r>&environment=<env>, so open that deployment; otherwise
+  // open the first one. Deployments are identified by (owner/repo, environment) —
+  // an app name can collide across repos, so match on the repo, not the app.
+  const params = useSearchParams();
+  const ownerParam = params.get("owner");
+  const repoParam = params.get("repo");
+  const envParam = params.get("environment");
+  const [open, setOpen] = useState<string>(() => {
+    const fullRepo = ownerParam && repoParam ? `${ownerParam}/${repoParam}` : "";
+    const match = deployments.find(
+      (d) => d.repo === fullRepo && (!envParam || d.environment === envParam),
+    );
+    return deploymentKey(match ?? deployments[0]);
+  });
   const [refreshing, startRefresh] = useTransition();
   const [metrics, setMetrics] = useState<Record<string, ServerMetrics | null>>({});
   const [serverList, setServerList] = useState<ServerView[]>(servers);
   const serverById = new Map(serverList.map((s) => [s.id, s]));
 
-  // App health per deployment (keyed by app): undefined = not probed yet, null =
-  // could not reach the backend (unknown), otherwise the probe result.
+  // App health per deployment, keyed by (app, environment): undefined = not
+  // probed yet, null = could not reach the backend (unknown), otherwise the
+  // probe result.
   const [health, setHealth] = useState<Record<string, AppHealth | null>>({});
   // The delete confirmation gate (the open deployment to forget), and the set of
-  // apps already dropped locally so their cards disappear immediately on delete.
+  // deployment keys already dropped locally so their cards disappear immediately
+  // on delete.
   const [confirmDelete, setConfirmDelete] = useState<Deployment | null>(null);
-  const [deletedApps, setDeletedApps] = useState<Set<string>>(new Set());
-  const visibleDeployments = deployments.filter((d) => !deletedApps.has(d.app));
+  const [confirmClearLock, setConfirmClearLock] = useState<Deployment | null>(null);
+  // Set when a domain was configured but recording its port on the deployment
+  // failed, so the domain won't associate — surfaced instead of silently lost.
+  const [portAssocError, setPortAssocError] = useState<string | null>(null);
+  const [deletedKeys, setDeletedKeys] = useState<Set<string>>(new Set());
+  const visibleDeployments = deployments.filter((d) => !deletedKeys.has(deploymentKey(d)));
 
-  // Probe the open deployment's health on demand (no daemon), keyed by app so it
-  // is fetched once per open until a refresh clears the cache. setState only runs
-  // in the resolved callback, never synchronously in the effect body.
+  // The currently open deployment, resolved from its (app, environment) key.
+  const openDeployment = visibleDeployments.find((d) => deploymentKey(d) === open);
+
+  // Probe the open deployment's health on demand (no daemon), keyed by (app,
+  // environment) so it is fetched once per open until a refresh clears the cache.
+  // setState only runs in the resolved callback, never synchronously in the body.
   useEffect(() => {
-    if (!open || open in health) return;
+    if (!openDeployment || open in health) return;
     const ctrl = new AbortController();
-    fetchAppHealth(open, ctrl.signal).then((h) => setHealth((prev) => ({ ...prev, [open]: h })));
+    const [owner, repo] = splitRepo(openDeployment.repo);
+    fetchAppHealth(owner, repo, openDeployment.environment, ctrl.signal).then((h) =>
+      setHealth((prev) => ({ ...prev, [open]: h })),
+    );
     return () => ctrl.abort();
-  }, [open, health]);
+  }, [open, health, openDeployment]);
 
   // confirmDeployDelete forgets a deployment's tracking, drops its card locally,
   // then refreshes to re-pull authoritative state. Runs from an event handler.
-  async function confirmDeployDelete(app: string) {
+  async function confirmDeployDelete(d: Deployment) {
     setConfirmDelete(null);
-    const ok = await deleteDeployment(app);
+    const [owner, repo] = splitRepo(d.repo);
+    const ok = await deleteDeployment(owner, repo, d.environment);
     if (!ok) return;
-    setDeletedApps((prev) => new Set(prev).add(app));
+    setDeletedKeys((prev) => new Set(prev).add(deploymentKey(d)));
+    startRefresh(() => router.refresh());
+  }
+
+  // confirmLockClear force-releases a stuck deploy lock, then refreshes to
+  // re-pull authoritative lock state. Runs from an event handler.
+  async function confirmLockClear(d: Deployment) {
+    setConfirmClearLock(null);
+    const [owner, repo] = splitRepo(d.repo);
+    const ok = await clearDeployLock(owner, repo, d.environment);
+    if (!ok) return;
     startRefresh(() => router.refresh());
   }
 
@@ -127,7 +182,6 @@ export function MonitorView({
   const [previewState, setPreviewState] = useState<{ host: string; data: DomainPreview | null } | null>(null);
 
   const liveCount = visibleDeployments.filter((d) => d.status === "live").length;
-  const openDeployment = visibleDeployments.find((d) => d.app === open);
   const openServerId = openDeployment?.serverId ?? "";
 
   // Read the open deployment's server metrics on demand (no daemon), keyed by
@@ -249,6 +303,19 @@ export function MonitorView({
         />
       </div>
 
+      {portAssocError && (
+        <div className="mt-6 flex items-start justify-between gap-4 rounded-xl border border-red-400/30 bg-red-400/[0.05] px-4 py-3 text-[13px] leading-6 text-red-200">
+          <span>{portAssocError}</span>
+          <button
+            onClick={() => setPortAssocError(null)}
+            className="shrink-0 text-red-300 transition-colors hover:text-cream"
+            aria-label="dismiss"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       <div className="rise mt-8 flex flex-col gap-5" style={{ animationDelay: "120ms" }}>
         {visibleDeployments.length === 0 && (
           <p className="rounded-2xl border border-dashed border-line px-6 py-16 text-center text-[14px] text-muted">
@@ -257,13 +324,14 @@ export function MonitorView({
         )}
         {visibleDeployments.map((d) => {
           const server = serverById.get(d.serverId);
-          const isOpen = open === d.app;
+          const key = deploymentKey(d);
+          const isOpen = open === key;
           const m = metrics[d.serverId]; // undefined = still reading, else last good reading
           const latest = d.runs[0];
           return (
-            <section key={d.app} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
+            <section key={key} className="relative overflow-hidden rounded-2xl border border-line bg-surface">
               <button
-                onClick={() => setOpen(isOpen ? "" : d.app)}
+                onClick={() => setOpen(isOpen ? "" : key)}
                 className="flex w-full items-center gap-4 px-6 py-5 pr-16 text-left"
                 aria-expanded={isOpen}
               >
@@ -272,11 +340,13 @@ export function MonitorView({
                 <div className="min-w-0 flex-1">
                   <span className="flex flex-wrap items-center gap-3">
                     <span className="text-[18px] font-semibold text-cream">{d.app}</span>
+                    {d.environment && <Badge tone="lime-solid">{d.environment}</Badge>}
                     <Badge tone={statusTone[d.status]} dot>
                       {d.status}
                     </Badge>
-                    <HealthPill health={health[d.app]} />
+                    <HealthPill health={health[key]} />
                     {latest && <LatestRunPill status={latest.status} />}
+                    {d.locked && <LockPill since={d.lockedSince} />}
                   </span>
                   <span className="mt-1.5 block truncate text-[13px] text-muted">
                     {d.repo} · {d.branch} · {server?.name ?? d.serverId}
@@ -294,7 +364,7 @@ export function MonitorView({
                   deployment={d}
                   server={server}
                   metrics={m}
-                  health={health[d.app]}
+                  health={health[key]}
                   onAddDomain={(server, value) =>
                     setConfirmDomain({ server, mode: "add", value })
                   }
@@ -302,6 +372,7 @@ export function MonitorView({
                     setConfirmDomain({ server, mode: "remove", host })
                   }
                   onDelete={() => setConfirmDelete(d)}
+                  onClearLock={() => setConfirmClearLock(d)}
                 />
               )}
             </section>
@@ -324,11 +395,24 @@ export function MonitorView({
               ? addDomainUrl(domainTarget.server.id, domainTarget.value)
               : removeDomainUrl(domainTarget.server.id, domainTarget.host)
           }
-          onDone={(ok) => {
+          onDone={async (ok) => {
             if (!ok) return;
-            if (domainTarget.mode === "add")
+            if (domainTarget.mode === "add") {
               recordDomainAdd(domainTarget.server.id, domainTarget.value);
-            else recordDomainRemove(domainTarget.server.id, domainTarget.host);
+              // Record the domain's port as the open deployment's port so the
+              // domain associates with it (the card matches domain→deployment by
+              // port). The domain is already live on the server; if this link
+              // fails, surface it — otherwise the domain silently won't show here.
+              if (openDeployment) {
+                const [owner, repo] = splitRepo(openDeployment.repo);
+                const linked = await setDeploymentPort(owner, repo, openDeployment.environment, Number(domainTarget.value.upstream));
+                if (!linked) {
+                  setPortAssocError(
+                    `${domainTarget.value.host} is live on the server, but linking it to ${openDeployment.app} (${openDeployment.environment}) failed. re-add the domain, or set the app port, or it won't show on this card.`,
+                  );
+                }
+              }
+            } else recordDomainRemove(domainTarget.server.id, domainTarget.host);
             startRefresh(() => router.refresh());
           }}
           onClose={() => setDomainTarget(null)}
@@ -428,8 +512,31 @@ export function MonitorView({
             "remove the deployment record and its append-only history from mountabo",
           ]}
           confirmLabel="delete deployment"
-          onConfirm={() => void confirmDeployDelete(confirmDelete.app)}
+          onConfirm={() => void confirmDeployDelete(confirmDelete)}
           onCancel={() => setConfirmDelete(null)}
+        />
+      )}
+
+      {/* Clear a stuck deploy lock: a recovery escape hatch, not destructive. */}
+      {confirmClearLock && (
+        <ConfirmAction
+          title={`clear lock on ${confirmClearLock.app}`}
+          subtitle="allow a new deploy to start"
+          summary={
+            <>
+              this force-releases the deploy lock on <span className="text-cream">{confirmClearLock.app}</span>{" "}
+              so a new deploy can start. only do this if a previous deploy wedged and left the target
+              locked — clearing it while a deploy is genuinely running could let two deploys race.
+            </>
+          }
+          stepsLabel="what clearing does"
+          steps={[
+            `release mountabo's in-process deploy lock for ${confirmClearLock.app}`,
+            "does not touch the server, the running app, or GitHub — it only frees the local lock",
+          ]}
+          confirmLabel="clear stuck lock"
+          onConfirm={() => void confirmLockClear(confirmClearLock)}
+          onCancel={() => setConfirmClearLock(null)}
         />
       )}
     </main>
@@ -458,6 +565,16 @@ function HealthPill({ health }: { health: AppHealth | null | undefined }) {
   return (
     <Badge tone="red" dot>
       unhealthy{health.status ? ` · ${health.status}` : ""}
+    </Badge>
+  );
+}
+
+// LockPill shows on a card while a deploy to this target is in flight (the
+// backend's per-target deploy lock is held), with how long it has been held.
+function LockPill({ since }: { since?: string }) {
+  return (
+    <Badge tone="lime" dot>
+      deploying{since ? ` · ${since}` : ""}
     </Badge>
   );
 }
@@ -519,6 +636,7 @@ function ExpandedCard({
   onAddDomain,
   onRemoveDomain,
   onDelete,
+  onClearLock,
 }: {
   deployment: Deployment;
   server?: ServerView;
@@ -527,6 +645,7 @@ function ExpandedCard({
   onAddDomain: (server: ServerView, value: DomainFormValue) => void;
   onRemoveDomain: (server: ServerView, host: string) => void;
   onDelete: () => void;
+  onClearLock: () => void;
 }) {
   const latest = d.runs[0];
   const [owner, repo] = splitRepo(d.repo);
@@ -553,10 +672,15 @@ function ExpandedCard({
   // at this deployment's port show on the card, and the add form pre-fills
   // that port so adding one is a single field. Pre-computed so the tab bar
   // can show the count and the panel can render without re-deriving it.
+  // Domains are server-level; a deployment claims one only when the domain's
+  // nginx upstream points at the deployment's published port. With no port there
+  // is nothing to match, so this deployment claims no domains — showing every
+  // server domain here would falsely attribute another app's domain to it
+  // (common now that one server hosts several environments).
   const envPort = d.port > 0 ? String(d.port) : undefined;
   const envDomains = envPort
     ? (server?.domains ?? []).filter((dm) => dm.upstream === envPort)
-    : (server?.domains ?? []);
+    : [];
 
   // Tab definitions for the segmented control at the top of the card. Each
   // tab is one panel; only the active one renders below, which keeps the
@@ -585,7 +709,7 @@ function ExpandedCard({
       ? [{ key: "domains" as const, label: `custom domains (${envDomains.length})` }]
       : []),
     ...(timelineCount > 0
-      ? [{ key: "timeline" as const, label: `deploy timeline (${d.deploys ?? 0})` }]
+      ? [{ key: "timeline" as const, label: `releases (${d.deploys ?? 0})` }]
       : []),
   ];
 
@@ -710,7 +834,7 @@ function ExpandedCard({
             <div className="flex items-center justify-between rounded-xl border border-line bg-surface px-4 py-3 text-[13.5px]">
               <span className="flex items-center gap-3">
                 <span className="h-1.5 w-1.5 rounded-full bg-lime" />
-                <span className="text-cream">{d.branch}</span>
+                <span className="text-cream">{d.environment || d.branch}</span>
                 <span className="text-muted">on branch {d.branch}</span>
               </span>
               <span className="text-[12px] text-muted">current</span>
@@ -755,7 +879,7 @@ function ExpandedCard({
                     placeholder={
                       branches === null
                         ? "reading branches from github,"
-                        : "branch name, for example production or staging"
+                        : "branch name, for example main or develop"
                     }
                     spellCheck={false}
                     autoCapitalize="off"
@@ -777,7 +901,7 @@ function ExpandedCard({
 
         {/* step-by-step deploy walkthrough from GitHub Actions */}
         {tab === "walkthrough" && (
-          <RunWalkthrough owner={owner} repo={repo} branch={d.branch} latestStatus={latest?.status} />
+          <RunWalkthrough owner={owner} repo={repo} branch={d.branch} environment={d.environment} latestStatus={latest?.status} />
         )}
 
         {/* runs list with clickable GitHub links */}
@@ -786,8 +910,8 @@ function ExpandedCard({
             <p className="text-[14px] text-muted">no runs recorded yet.</p>
           ) : (
             <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
-              {d.runs.map((r) => (
-                <RunRow key={r.sha} run={r} />
+              {d.runs.map((r, i) => (
+                <RunRow key={`${r.runUrl || r.sha}:${i}`} run={r} />
               ))}
             </ul>
           ))}
@@ -808,27 +932,46 @@ function ExpandedCard({
         {tab === "domains" && server && (
           <div className="overflow-hidden rounded-xl border border-line bg-surface">
             <ServerDomains
-              key={`dom:${envPort ?? "all"}:${envDomains.map((dm) => dm.host).join(",")}`}
+              key={`dom:${envPort ?? "none"}:${envDomains.map((dm) => dm.host).join(",")}`}
               server={server}
               onAdd={(value) => onAddDomain(server, value)}
               onRemove={(host) => onRemoveDomain(server, host)}
+              scoped
               filterUpstream={envPort}
               defaultPort={envPort}
             />
           </div>
         )}
 
-        {/* deploy timeline */}
+        {/* release history */}
         {tab === "timeline" && timelineCount > 0 && (
-          <ul className="space-y-3 text-[14px]">
-            {(d.timeline ?? []).map((e, i) => (
-              <li key={i} className="flex items-center gap-3">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-blue" />
-                <span className="text-body">configured for {e.environment}</span>
-                <span className="ml-auto text-muted">{e.when}</span>
-              </li>
+          <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+            {(d.timeline ?? []).map((rel, i) => (
+              <ReleaseRow key={i} release={rel} />
             ))}
           </ul>
+        )}
+
+        {/* stuck-lock recovery: only shown while the deploy lock is held. Clears
+            the in-process lock so a new deploy can start if a previous one wedged. */}
+        {d.locked && (
+          <div className="mt-2 rounded-xl border border-line bg-surface/40 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-[15px] font-medium text-cream">a deploy is in progress</p>
+                <p className="mt-1 max-w-xl text-[13px] leading-6 text-muted">
+                  {d.app} is locked{d.lockedSince ? ` (since ${d.lockedSince})` : ""} while a deploy runs.
+                  if a deploy wedged and left it stuck, clear the lock to allow a new deploy.
+                </p>
+              </div>
+              <button
+                onClick={onClearLock}
+                className="flex shrink-0 items-center gap-2 rounded-md border border-line px-4 py-2 text-[13px] font-medium text-body transition-colors hover:bg-surface"
+              >
+                clear stuck lock
+              </button>
+            </div>
+          </div>
         )}
 
         {/* danger zone: deleting tears the deployment down, so it gets its own
@@ -1065,11 +1208,13 @@ function RunWalkthrough({
   owner,
   repo,
   branch,
+  environment,
   latestStatus,
 }: {
   owner: string;
   repo: string;
   branch: string;
+  environment: string;
   latestStatus?: RunStatus;
 }) {
   const [steps, setSteps] = useState<RunSteps | null>(null);
@@ -1083,7 +1228,7 @@ function RunWalkthrough({
 
     async function tick() {
       const ctrl = new AbortController();
-      const res = await fetchRunSteps(owner, repo, branch, ctrl.signal);
+      const res = await fetchRunSteps(owner, repo, branch, environment, ctrl.signal);
       if (cancelled) return;
       setSteps(res);
       // Keep polling only while the run is still going; stop once it completes.
@@ -1097,7 +1242,7 @@ function RunWalkthrough({
     };
     // latestStatus is included so a refresh that flips the run back to running
     // (a new deploy) restarts polling.
-  }, [enabled, owner, repo, branch, latestStatus]);
+  }, [enabled, owner, repo, branch, environment, latestStatus]);
 
   if (enabled && steps === null) {
     return <p className="mt-4 text-[13px] text-muted">reading the latest workflow run…</p>;
@@ -1461,9 +1606,9 @@ function Summary({
 function RunStrip({ runs }: { runs: DeployRun[] }) {
   return (
     <span className="hidden items-center gap-1 md:flex" title="recent deploys">
-      {runs.map((r) => (
+      {runs.map((r, i) => (
         <span
-          key={r.sha}
+          key={`${r.runUrl || r.sha}:${i}`}
           className={`h-5 w-1.5 rounded-sm ${runColor[r.status]} ${
             r.status === "running" ? "animate-pulse" : ""
           }`}
@@ -1545,6 +1690,43 @@ function RunRow({ run }: { run: DeployRun }) {
           rel="noopener noreferrer"
           className="shrink-0 text-muted transition-colors hover:text-cream"
           aria-label={`open run ${run.sha} on github`}
+        >
+          <ExternalLink />
+        </a>
+      ) : (
+        <span className="w-3.5 shrink-0" />
+      )}
+    </li>
+  );
+}
+
+// ReleaseRow renders one entry of a deployment's release history: its status
+// (overlaid live from the matching Actions run when available), the deployed
+// commit, the environment, who triggered it, and when. Read-only; rollback
+// actions come in a later phase.
+function ReleaseRow({ release }: { release: Release }) {
+  const hasSHA = release.sha && release.sha !== "n/a";
+  return (
+    <li className="flex items-center gap-3 px-5 py-3 text-[13px]">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${releaseColor[release.status]}`} />
+      {hasSHA ? (
+        <code className="shrink-0 font-mono text-cream">{release.sha}</code>
+      ) : (
+        <span className="w-14 shrink-0 text-muted">n/a</span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-body">{release.environment}</span>
+      <Badge tone={releaseTone[release.status]}>{release.status}</Badge>
+      {release.actor && (
+        <span className="hidden text-muted sm:inline">{release.actor}</span>
+      )}
+      <span className="w-16 text-right text-muted">{release.when}</span>
+      {release.runUrl ? (
+        <a
+          href={release.runUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="shrink-0 text-muted transition-colors hover:text-cream"
+          aria-label={`open the run for release ${release.sha} on github`}
         >
           <ExternalLink />
         </a>

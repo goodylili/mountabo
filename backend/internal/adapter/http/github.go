@@ -277,7 +277,7 @@ func (h *GitHubHandler) RunSteps(w nethttp.ResponseWriter, r *nethttp.Request) {
 		ref = "main"
 	}
 
-	steps, err := h.runSteps.Steps(r.Context(), owner, repo, ref)
+	steps, err := h.runSteps.Steps(r.Context(), owner, repo, ref, q.Get("environment"))
 	if errors.Is(err, usecase.ErrNotConnected) {
 		h.writeError(w, nethttp.StatusUnauthorized, "github not connected")
 		return

@@ -364,6 +364,8 @@ func streamSSE(w nethttp.ResponseWriter, log *slog.Logger, successMsg string, ru
 		sw.event("error", "github not connected")
 	case errors.Is(err, usecase.ErrSetupInProgress):
 		sw.event("error", "another setup/apply is already running for this server")
+	case errors.Is(err, usecase.ErrDeployInProgress):
+		sw.event("error", "another deploy is already running for this app")
 	default:
 		log.Error("stream operation failed", "err", err)
 		// Surface the (secret-free) reason, then the terminal error event.

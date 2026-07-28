@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const incoming = new URL(request.url);
   const target = new URL(`${backendURL()}/api/github/run-steps`);
-  target.search = incoming.search; // forward owner, repo, ref
+  target.search = incoming.search; // forward owner, repo, ref, environment
 
   let resp: Response;
   try {

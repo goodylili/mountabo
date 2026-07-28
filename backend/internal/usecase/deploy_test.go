@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -48,13 +49,27 @@ func (f *fakeDeploymentStore) Save(d Deployment) error {
 	return nil
 }
 
-// DeleteByApp removes every saved deployment with the given app, reporting
-// whether any was removed, so the store doubles as a DeploymentDeleter in tests.
-func (f *fakeDeploymentStore) DeleteByApp(app string) (bool, error) {
+// SetPort updates the recorded port of the matching deployment, so the store
+// doubles as a DeploymentPortSetter in tests.
+func (f *fakeDeploymentStore) SetPort(owner, repo, environment string, port int) (bool, error) {
+	updated := false
+	for i, d := range f.saved {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
+			f.saved[i].Port = port
+			updated = true
+		}
+	}
+	return updated, nil
+}
+
+// Delete removes every saved deployment matching (owner, repo, environment),
+// reporting whether any was removed, so the store doubles as a DeploymentDeleter
+// in tests.
+func (f *fakeDeploymentStore) Delete(owner, repo, environment string) (bool, error) {
 	kept := make([]Deployment, 0, len(f.saved))
 	removed := false
 	for _, d := range f.saved {
-		if d.App == app {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
 			removed = true
 			continue
 		}
@@ -87,17 +102,27 @@ func (f *fakeDeployKeyInstaller) InstallDeployKey(_ context.Context, _ SSHTarget
 	return nil
 }
 
-// fakeWorkflowDispatcher records the dispatch requests it received, so a test
-// can assert the deploy auto-triggered the workflow. err is configurable to
-// exercise the deploy's best-effort dispatch-failure branch.
-type fakeWorkflowDispatcher struct {
-	dispatched []string
-	err        error
+// fakeRefResolver returns a canned head SHA (or an error) so a test can assert
+// the resolved commit lands on the recorded release and that a resolve failure
+// does not fail the deploy.
+type fakeRefResolver struct {
+	sha string
+	err error
 }
 
-func (f *fakeWorkflowDispatcher) DispatchWorkflow(_ context.Context, _ Token, owner, repo, workflowFile, ref string) error {
-	f.dispatched = append(f.dispatched, owner+"/"+repo+":"+workflowFile+"@"+ref)
-	return f.err
+func (f fakeRefResolver) HeadSHA(_ context.Context, _ Token, _, _, _ string) (string, error) {
+	return f.sha, f.err
+}
+
+// fakeAccountFetcher returns a canned login (or an error) so a test can assert
+// the deploy actor lands on the recorded release.
+type fakeAccountFetcher struct {
+	login string
+	err   error
+}
+
+func (f fakeAccountFetcher) Account(_ context.Context, _ Token) (Account, error) {
+	return Account{Login: f.login}, f.err
 }
 
 type fakeTokenStore struct {
@@ -115,7 +140,7 @@ func readyDeployFixture(t *testing.T) (*memServerStore, *fakeVault, *fakeRepoWri
 	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
 	repo, envs, secrets := &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, &fakeWorkflowDispatcher{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, repo, envs, secrets, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
 	return store, vault, repo, envs, secrets, svc
 }
 
@@ -185,6 +210,23 @@ func TestDeploy_WritesArtifactsProvisionsEnvAndSecrets(t *testing.T) {
 	}
 }
 
+func TestDeploy_RejectsUnsafeEnvironmentName(t *testing.T) {
+	_, _, _, _, _, svc := readyDeployFixture(t)
+	in := deployInput()
+	in.Environment = "feature/foo" // a slash would break the /{environment} route
+	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); err == nil {
+		t.Fatal("Deploy should reject an environment name with a slash")
+	}
+
+	// A blank environment that would default to a slashed branch is also rejected.
+	in2 := deployInput()
+	in2.Environment = ""
+	in2.Branch = "feature/foo"
+	if err := svc.Deploy(context.Background(), in2, new(strings.Builder)); err == nil {
+		t.Fatal("Deploy should reject a blank environment that defaults to a slashed branch")
+	}
+}
+
 func TestDeploy_EnvironmentOverridesBranch(t *testing.T) {
 	_, _, _, envs, secrets, svc := readyDeployFixture(t)
 	in := deployInput()
@@ -198,10 +240,75 @@ func TestDeploy_EnvironmentOverridesBranch(t *testing.T) {
 	}
 }
 
+func TestDeploy_RecordsReleaseCommitAndActor(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
+	history := &fakeDeploymentStore{}
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, history, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
+
+	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(history.saved) != 1 {
+		t.Fatalf("want 1 recorded release, got %d", len(history.saved))
+	}
+	if rec := history.saved[0]; rec.CommitSHA != "abc1234def" || rec.Actor != "octocat" {
+		t.Errorf("release commit/actor = %q/%q, want abc1234def/octocat", rec.CommitSHA, rec.Actor)
+	}
+}
+
+func TestDeploy_ReleaseMetadataFailureIsNonFatal(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
+	history := &fakeDeploymentStore{}
+	// Both the commit resolve and the actor lookup fail; the deploy must still
+	// succeed and record a release, just with the fields left empty.
+	metaErr := errors.New("github unavailable")
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, history, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{err: metaErr}, fakeAccountFetcher{err: metaErr}, NewDeployLocker())
+
+	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
+		t.Fatalf("Deploy should not fail on release-metadata errors: %v", err)
+	}
+	if len(history.saved) != 1 {
+		t.Fatalf("want 1 recorded release, got %d", len(history.saved))
+	}
+	if rec := history.saved[0]; rec.CommitSHA != "" || rec.Actor != "" {
+		t.Errorf("release commit/actor = %q/%q, want both empty", rec.CommitSHA, rec.Actor)
+	}
+}
+
+func TestDeploy_LockRejectsConcurrentAndReleasesAfter(t *testing.T) {
+	store, vault := newMemServerStore(), newFakeVault()
+	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady})
+	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
+	locker := NewDeployLocker()
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, locker)
+	in := deployInput()
+
+	// A deploy to the same app is in flight (lock held): the second is rejected.
+	if !locker.TryAcquire(lockKey(in.Owner, in.Repo, in.Branch)) {
+		t.Fatal("precondition: could not acquire the lock")
+	}
+	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); !errors.Is(err, ErrDeployInProgress) {
+		t.Fatalf("concurrent deploy: want ErrDeployInProgress, got %v", err)
+	}
+	locker.Release(lockKey(in.Owner, in.Repo, in.Branch))
+
+	// With the lock free, the deploy succeeds and releases the lock on return.
+	if err := svc.Deploy(context.Background(), in, new(strings.Builder)); err != nil {
+		t.Fatalf("Deploy after release: %v", err)
+	}
+	if _, held := locker.Held(lockKey(in.Owner, in.Repo, in.Branch)); held {
+		t.Error("lock should be released after Deploy returns")
+	}
+}
+
 func TestDeploy_RequiresReadyServer(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusProbed})
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, &fakeWorkflowDispatcher{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
 
 	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err == nil {
 		t.Fatal("expected an error deploying to a server that is not ready")
@@ -225,7 +332,7 @@ func TestDeploy_NotConnected(t *testing.T) {
 	store, vault := newMemServerStore(), newFakeVault()
 	_ = store.Save(Server{ID: "s1", Status: StatusReady})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "KEY")
-	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, &fakeWorkflowDispatcher{})
+	svc := NewDeployService(store, vault, fakeTokenStore{err: ErrNotConnected}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
 
 	err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder))
 	if err == nil {
@@ -278,7 +385,7 @@ func TestDeploy_RegistersAndInstallsDeployKey(t *testing.T) {
 	_ = store.Save(Server{ID: "s1", IP: "5.6.7.8", SSHPort: 22, Status: StatusReady, Fingerprint: "fp"})
 	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
 	mgr, inst := &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst, &fakeWorkflowDispatcher{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
 
 	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
 		t.Fatalf("Deploy: %v", err)
@@ -305,7 +412,7 @@ func TestDeploy_ReusesStoredDeployKey(t *testing.T) {
 	_ = vault.SaveSecret(privateKeyKey("s1"), "MOUNTABO-KEY-PEM")
 	_ = vault.SaveSecret(deployKeyVaultKey("acme", "shop"), "EXISTING-DEPLOY-KEY")
 	mgr, inst := &fakeDeployKeyManager{}, &fakeDeployKeyInstaller{}
-	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst, &fakeWorkflowDispatcher{})
+	svc := NewDeployService(store, vault, fakeTokenStore{token: Token{AccessToken: "tok"}}, &fakeRepoWriter{}, &fakeEnvManager{}, &fakeSecretSetter{}, &fakeDeploymentStore{}, fakeKeyMaker{}, mgr, inst, fakeRefResolver{sha: "abc1234def"}, fakeAccountFetcher{login: "octocat"}, NewDeployLocker())
 
 	if err := svc.Deploy(context.Background(), deployInput(), new(strings.Builder)); err != nil {
 		t.Fatalf("Deploy: %v", err)

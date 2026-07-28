@@ -52,14 +52,14 @@ func NewAppHealthService(deployments DeploymentLookup, servers ServerStore, vaul
 	return &AppHealthService{deployments: deployments, servers: servers, vault: vault, prober: prober}
 }
 
-// Health probes the deployment named by app and reports whether it is up. It
-// resolves the deployment's server and the address to probe (its domain, or its
-// loopback published port), connects to the server as the mountabo user, and
-// curls the app from the box. ErrDeploymentNotFound is returned when no
-// deployment has that app; ErrServerNotFound propagates from the store. A probe
-// that connects but gets no answer (app down) is NOT an error: it returns an
-// AppHealth with Reachable false so the card can show "unhealthy".
-func (s *AppHealthService) Health(ctx context.Context, app string) (AppHealth, error) {
+// Health probes the deployment identified by (owner, repo, environment) and
+// reports whether it is up. It resolves the deployment's server and the address to probe
+// (its domain, or its loopback published port), connects to the server as the
+// mountabo user, and curls the app from the box. ErrDeploymentNotFound is
+// returned when no deployment matches; ErrServerNotFound propagates from the
+// store. A probe that connects but gets no answer (app down) is NOT an error: it
+// returns an AppHealth with Reachable false so the card can show "unhealthy".
+func (s *AppHealthService) Health(ctx context.Context, owner, repo, environment string) (AppHealth, error) {
 	deployments, err := s.deployments.List()
 	if err != nil {
 		return AppHealth{}, fmt.Errorf("list deployments: %w", err)
@@ -67,7 +67,7 @@ func (s *AppHealthService) Health(ctx context.Context, app string) (AppHealth, e
 	var dep Deployment
 	found := false
 	for _, d := range deployments {
-		if d.App == app {
+		if d.Owner == owner && d.Repo == repo && d.Environment == environment {
 			dep, found = d, true
 			break
 		}
@@ -118,9 +118,11 @@ func (s *AppHealthService) Health(ctx context.Context, app string) (AppHealth, e
 // probe runs on the server, so loopback is reachable even when the port is bound
 // to 127.0.0.1 only.
 func probeURL(server Server, dep Deployment) (url, target string) {
-	if len(server.Domains) > 0 {
-		host := server.Domains[0].Host
-		return "https://" + host, host
+	// Prefer THIS deployment's own domain (the one whose nginx upstream is the
+	// deployment's port), so health follows the real visitor path — not just the
+	// server's first domain, which may front a different deployment.
+	if d, ok := domainForPort(server, dep.Port); ok {
+		return "https://" + d.Host, d.Host
 	}
 	if dep.Port > 0 {
 		addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(dep.Port))
